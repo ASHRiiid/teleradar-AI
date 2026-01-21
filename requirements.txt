@@ -1,0 +1,9 @@
+telethon
+pydantic
+python-dotenv
+openai
+httpx
+jinja2
+loguru
+aiofiles
+pytz
