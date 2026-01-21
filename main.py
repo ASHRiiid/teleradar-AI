@@ -15,7 +15,7 @@ async def process_message(msg, scraper, summarizer, delivery):
     logger.info(f"Processing message {msg.external_id} from {msg.chat_name}")
     
     scraped_contents = []
-    # 抓取链接内容
+    # 抓取链接内容1
     for url in msg.urls[:3]: # 限制每条消息抓取前 3 个链接
         sc = await scraper.scrape(url)
         scraped_contents.append(sc)
