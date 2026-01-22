@@ -7,3 +7,7 @@ jinja2
 loguru
 aiofiles
 pytz
+fastapi
+uvicorn
+streamlit
+pandas

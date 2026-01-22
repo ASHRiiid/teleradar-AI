@@ -8,7 +8,8 @@ import sys
 import os
 import sqlite3
 import uuid
-from datetime import datetime, timedelta
+import json
+from datetime import datetime, timedelta, timezone
 import logging
 from typing import List, Dict, Any
 
@@ -18,6 +19,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.config import config
+from src.storage import Storage
+from src.processors.summarizer import AISummarizer
+from src.models import UnifiedMessage, Platform
 from telethon import TelegramClient
 from telethon.tl.types import Message as TLMessage
 
@@ -70,21 +74,28 @@ async def collect_from_group(client: TelegramClient, chat_url: str, hours_back: 
     messages = []
     
     try:
+        # 处理可能的数字 ID
+        target = chat_url
+        if isinstance(chat_url, str) and (chat_url.isdigit() or (chat_url.startswith('-') and chat_url[1:].isdigit())):
+            try:
+                target = int(chat_url)
+            except ValueError:
+                pass
+
         # 获取群组实体
-        entity = await client.get_entity(chat_url)
+        entity = await client.get_entity(target)
         chat_name = entity.title if hasattr(entity, 'title') else str(entity.id)
         chat_id = str(entity.id)
         
         logger.info(f"开始采集群组: {chat_name}")
         
         # 计算时间范围
-        end_time = datetime.now()
-        start_time = end_time - timedelta(hours=hours_back)
+        start_time = datetime.now(timezone.utc) - timedelta(hours=hours_back)
         
         # 获取消息
         async for message in client.iter_messages(entity, limit=100):
-            # 检查消息时间
-            if message.date.replace(tzinfo=None) < start_time:
+            # 检查消息时间 (message.date 已经是 timezone-aware UTC)
+            if message.date < start_time:
                 break
             
             # 提取消息内容
@@ -109,7 +120,7 @@ async def collect_from_group(client: TelegramClient, chat_url: str, hours_back: 
                 'author_name': message.sender_id if message.sender_id else 'unknown',
                 'content': content,
                 'urls': ','.join(urls) if urls else '',
-                'timestamp': message.date.replace(tzinfo=None).isoformat(),
+                'timestamp': message.date.isoformat(),
                 'processed': 0
             }
             
@@ -223,31 +234,38 @@ async def push_to_channel(messages: List[Dict[str, Any]]) -> bool:
         channel = await client.get_entity(config.push_config.channel_username)
         
         # 构建消息内容
-        message_text = "📊 最新采集消息（最后3条）\n\n"
+        message_text = "📊 **AI 智能信息简报**\n\n"
         
         for i, msg in enumerate(messages, 1):
-            message_text += f"🔹 **消息 {i}**\n"
-            message_text += f"来源: {msg['chat_name']}\n"
-            message_text += f"时间: {msg['timestamp'][:19]}\n"
+            message_text += f"🔹 **{msg['chat_name']}**\n"
             
-            # 截取内容
-            content = msg['content']
-            if len(content) > 200:
-                content = content[:200] + "..."
+            # 使用 AI 摘要，如果没有则使用原内容
+            summary = msg.get('summary', msg['content'])
+            if len(summary) > 300:
+                summary = summary[:300] + "..."
             
-            message_text += f"内容: {content}\n"
+            message_text += f"📝 {summary}\n"
+            
+            # 添加标签
+            if msg.get('tags'):
+                tags = msg['tags']
+                if isinstance(tags, str):
+                    try:
+                        tags = json.loads(tags)
+                    except:
+                        tags = tags.split(',')
+                message_text += f"🏷 `{'` `'.join(tags)}`\n"
             
             if msg['urls']:
                 urls = msg['urls'].split(',')
-                for url in urls[:2]:  # 最多显示2个URL
-                    message_text += f"链接: {url}\n"
+                message_text += f"🔗 [查看原文]({urls[0]})\n"
             
             message_text += "\n"
         
-        message_text += "📅 采集时间: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        message_text += "📅 生成时间: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # 发送消息
-        await client.send_message(channel, message_text)
+        await client.send_message(channel, message_text, link_preview=False)
         logger.info("消息已成功推送到频道")
         
         await client.disconnect()
@@ -264,7 +282,7 @@ def create_obsidian_md(messages: List[Dict[str, Any]]) -> str:
     
     # 生成文件名
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"telegram_collection_{timestamp}.md"
+    filename = f"AI_Report_{timestamp}.md"
     filepath = os.path.join(obsidian_dir, filename)
     
     # 获取数据库统计
@@ -272,57 +290,52 @@ def create_obsidian_md(messages: List[Dict[str, Any]]) -> str:
     cursor = conn.cursor()
     cursor.execute('SELECT COUNT(*) FROM messages')
     total_count = cursor.fetchone()[0]
+    cursor.execute('SELECT COUNT(*) FROM messages WHERE processed = 1')
+    analyzed_count = cursor.fetchone()[0]
     conn.close()
     
     # 构建 Markdown 内容
-    md_content = f"""# Telegram 信息采集报告
+    md_content = f"""# 🤖 AI 智能信息分析报告
 
-> 采集时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-> 监控群组: {len(config.collector_config.monitored_chats)} 个
-> 数据库消息总数: {total_count} 条
+> 报告时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+> 数据库总消息: {total_count} | 已完成 AI 分析: {analyzed_count}
 
-## 📊 采集统计
-- 本次采集消息数: {len(messages)}
-- 采集时间范围: 过去24小时
-- 数据库文件: `data/raw_messages.db`
+## 📊 本次分析摘要
 
-## 📋 监控群组列表
 """
     
-    # 添加群组列表
-    for i, chat in enumerate(config.collector_config.monitored_chats, 1):
-        md_content += f"{i}. `{chat}`\n"
-    
-    md_content += "\n## 📝 最新消息详情\n\n"
-    
-    # 添加消息详情
+    # 添加分析详情
     for i, msg in enumerate(messages, 1):
-        md_content += f"### 消息 {i}\n"
-        md_content += f"- **来源**: `{msg['chat_name']}`\n"
-        md_content += f"- **时间**: `{msg['timestamp']}`\n"
+        md_content += f"### {i}. {msg['chat_name']}\n"
+        md_content += f"- **采集时间**: `{msg['timestamp']}`\n"
+        
+        # 标签
+        tags = msg.get('tags', [])
+        if isinstance(tags, str):
+            try:
+                tags = json.loads(tags)
+            except:
+                tags = []
+        
+        if tags:
+            md_content += f"- **标签**: {' '.join([f'#{tag}' for tag in tags])}\n"
+        
+        md_content += f"\n#### 💡 AI 摘要\n{msg.get('summary', '无摘要')}\n"
         
         if msg['urls']:
             urls = msg['urls'].split(',')
-            md_content += f"- **链接**:\n"
+            md_content += f"\n#### 🔗 相关链接\n"
             for url in urls:
-                md_content += f"  - [{url}]({url})\n"
+                md_content += f"- [{url}]({url})\n"
         
-        md_content += f"- **内容**:\n\n```\n{msg['content']}\n```\n\n"
+        md_content += f"\n#### 📄 原始消息\n<details>\n<summary>点击展开</summary>\n\n```\n{msg['content']}\n```\n\n</details>\n\n---\n"
     
     # 添加系统信息
     md_content += f"""
-## 🔧 系统信息
-- 项目路径: `{os.path.abspath('.')}`
-- 数据库路径: `{os.path.abspath('data/raw_messages.db')}`
-- 采集账号: {config.collector_accounts[0].phone if config.collector_accounts else '未配置'}
-- 推送频道: {config.push_config.channel_username}
-
-## 📈 后续操作
-1. 运行 AI 分析: `python3 analyze_messages.py`
-2. 生成简报: `python3 generate_summary.py`
-3. 定时采集: 设置 cron 任务每小时运行一次
-
----
+## 🔧 系统状态
+- 采集群组: {len(config.collector_config.monitored_chats)} 个
+- 运行模式: 自动化全流程 (采集 -> 存储 -> AI 分析 -> 推送)
+- AI 模型: `deepseek-chat`
 
 *此文件由 Telegram 信息自动化系统自动生成*
 """
@@ -339,6 +352,10 @@ async def main():
     print("=" * 60)
     print("Telegram 信息自动化系统 - 完整采集流程")
     print("=" * 60)
+    
+    # 初始化组件
+    storage = Storage()
+    summarizer = AISummarizer(api_key=config.ai_config.deepseek_api_key, base_url=config.ai_config.openai_base_url)
     
     # 确保数据库存在
     ensure_database()
@@ -376,15 +393,53 @@ async def main():
         saved_count = save_messages(all_messages)
         print(f"   保存了 {saved_count} 条去重后的消息")
         
-        # 3. 获取最后三条消息
-        print("\n3. 📊 获取最后三条消息...")
-        last_three = get_last_three_messages()
-        print(f"   获取到 {len(last_three)} 条最新消息")
+        # 3. AI 分析
+        print("\n3. 🤖 执行 AI 深度分析...")
+        unprocessed = storage.get_unprocessed()
+        if unprocessed:
+            print(f"   发现 {len(unprocessed)} 条待分析消息，正在处理...")
+            for row in unprocessed[:10]: # 每次流程最多处理10条新消息
+                try:
+                    msg = UnifiedMessage(
+                        id=row['internal_id'],
+                        platform=Platform(row['platform']),
+                        external_id=row['external_id'],
+                        content=row['content'],
+                        author_id="unknown",
+                        author_name=row['author_name'],
+                        timestamp=datetime.fromisoformat(row['timestamp']) if isinstance(row['timestamp'], str) else row['timestamp'],
+                        chat_id=row['chat_id'],
+                        chat_name=row['chat_name'],
+                        urls=row['urls'].split(',') if row['urls'] else []
+                    )
+                    
+                    result = await summarizer.summarize_message(msg, [])
+                    storage.update_message_summary(msg.id, result.get("summary", ""), result.get("tags", []))
+                    print(f"   ✅ 已分析: {msg.chat_name}")
+                except Exception as e:
+                    print(f"   ❌ 分析失败: {e}")
+        else:
+            print("   没有待分析的消息")
+
+        # 4. 获取最后三条已分析的消息
+        print("\n4. 📊 获取已分析消息...")
+        conn = sqlite3.connect('data/raw_messages.db')
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT chat_name, content, urls, timestamp, summary, tags 
+            FROM messages 
+            WHERE processed = 1
+            ORDER BY timestamp DESC 
+            LIMIT 5
+        ''')
+        analyzed_messages = [dict(row) for row in cursor.fetchall()]
+        conn.close()
         
-        # 4. 推送到频道
-        print("\n4. 📤 推送到测试频道...")
-        if last_three:
-            success = await push_to_channel(last_three)
+        # 5. 推送到频道
+        print("\n5. 📤 推送到测试频道...")
+        if analyzed_messages:
+            success = await push_to_channel(analyzed_messages[:3])
             if success:
                 print("   ✅ 消息已推送到频道")
             else:
@@ -392,20 +447,20 @@ async def main():
         else:
             print("   没有消息需要推送")
         
-        # 5. 创建 Obsidian MD 文件
-        print("\n5. 📝 创建 Obsidian MD 文件...")
-        if last_three:
-            md_file = create_obsidian_md(last_three)
+        # 6. 创建 Obsidian MD 文件
+        print("\n6. 📝 创建 Obsidian MD 文件...")
+        if analyzed_messages:
+            md_file = create_obsidian_md(analyzed_messages)
             print(f"   ✅ MD 文件已创建: {md_file}")
         else:
             print("   没有消息，跳过创建 MD 文件")
         
         print("\n" + "=" * 60)
-        print("✅ 采集流程完成！")
+        print("✅ 采集与分析流程完成！")
         print("=" * 60)
         
     except Exception as e:
-        print(f"❌ 采集失败: {e}")
+        print(f"❌ 运行失败: {e}")
         import traceback
         traceback.print_exc()
     finally:
