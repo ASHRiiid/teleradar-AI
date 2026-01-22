@@ -5,19 +5,22 @@ import pytz
 from dotenv import load_dotenv
 from loguru import logger
 
-from src.adapters.telegram_adapter import TelegramAdapter
+from src.adapters.telegram_adapter_v2 import TelegramMultiAccountAdapter
 from src.storage import Storage
+from src.config import config
 
 load_dotenv()
 
 async def collect_only():
-    # 1. 初始化
-    api_id = int(os.getenv("API_ID"))
-    api_hash = os.getenv("API_HASH")
-    chats = os.getenv("MONITORED_CHATS").split(",")
-    
-    tg_adapter = TelegramAdapter(api_id, api_hash)
+    # 1. 初始化多账号适配器
+    tg_adapter = TelegramMultiAccountAdapter()
     storage = Storage()
+    
+    # 获取监控的群组
+    chats = config.collector_config.monitored_chats
+    if not chats:
+        logger.error("未配置监控群组")
+        return
 
     # 2. 计算北京时间 (UTC+8) 的抓取窗口
     beijing_tz = pytz.timezone('Asia/Shanghai')
@@ -43,16 +46,28 @@ async def collect_only():
     start_time_utc = start_time.astimezone(pytz.utc).replace(tzinfo=None)
     end_time_utc = end_time.astimezone(pytz.utc).replace(tzinfo=None)
 
-    # 3. 执行抓取并存入数据库
-    # 修改 adapter 以支持 end_date
-    messages = await tg_adapter.fetch_messages_between(chats, start_time_utc, end_time_utc)
+    # 3. 执行并发抓取并存入数据库
+    messages = await tg_adapter.fetch_messages_concurrently(chats, start_time_utc, end_time_utc)
     
     count = 0
     for msg in messages:
         storage.save_message(msg)
         count += 1
     
-    logger.info(f"Collected and saved {count} new messages to data/raw_messages.db")
+    logger.info(f"采集完成: 保存了 {count} 条去重后的消息到 data/raw_messages.db")
+    
+    # 4. 显示采集统计
+    if messages:
+        accounts_used = set()
+        chats_covered = set()
+        for msg in messages:
+            accounts_used.add(msg.metadata.get('collector_account', 'unknown'))
+            chats_covered.add(msg.metadata.get('chat', 'unknown'))
+        
+        logger.info(f"使用的采集账号: {', '.join(accounts_used)}")
+        logger.info(f"覆盖的群组: {', '.join(chats_covered)}")
+        logger.info(f"最早消息时间: {min(m.timestamp for m in messages).strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"最晚消息时间: {max(m.timestamp for m in messages).strftime('%Y-%m-%d %H:%M:%S')}")
 
 if __name__ == "__main__":
     asyncio.run(collect_only())
