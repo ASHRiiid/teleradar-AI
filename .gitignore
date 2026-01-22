@@ -1,0 +1,10 @@
+.DS_Store
+.env
+*.session
+*.session-journal
+data/*.db
+obsidian-tem/
+__pycache__/
+*.pyc
+user_instructions.md
+project_status.md
