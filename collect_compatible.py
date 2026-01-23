@@ -22,8 +22,7 @@ from src.config import config
 from src.storage import Storage
 from src.processors.summarizer import AISummarizer
 from src.models import UnifiedMessage, Platform
-from telethon import TelegramClient
-from telethon.tl.types import Message as TLMessage
+from src.adapters.telegram_adapter_v2 import TelegramMultiAccountAdapter
 
 # 配置日志
 logging.basicConfig(
@@ -350,7 +349,7 @@ def create_obsidian_md(messages: List[Dict[str, Any]]) -> str:
 async def main():
     """主函数"""
     print("=" * 60)
-    print("Telegram 信息自动化系统 - 完整采集流程")
+    print("Telegram 信息自动化系统 - 完整采集流程 (多账号并发版)")
     print("=" * 60)
     
     # 初始化组件
@@ -360,38 +359,33 @@ async def main():
     # 确保数据库存在
     ensure_database()
     
-    # 使用采集账号
-    collector_account = config.collector_accounts[0]
-    client = TelegramClient(
-        collector_account.session_name,
-        collector_account.api_id,
-        collector_account.api_hash
-    )
-    
-    try:
-        await client.connect()
-        
-        if not await client.is_user_authorized():
-            print("❌ 采集账号未认证")
-            return
-        
-        print("✅ 采集账号连接成功")
-        
+    # 使用多账号适配器
+    async with TelegramMultiAccountAdapter() as adapter:
         # 1. 采集消息
-        print("\n1. 📥 采集消息...")
-        all_messages = []
+        print("\n1. 📥 并发采集消息...")
+        start_time = datetime.now() - timedelta(hours=24)
+        end_time = datetime.now()
         
-        for chat_url in config.collector_config.monitored_chats:
-            print(f"   采集群组: {chat_url}")
-            messages = await collect_from_group(client, chat_url, hours_back=24)
-            all_messages.extend(messages)
+        # fetch_messages_concurrently 会自动根据账号配置进行采集
+        unified_messages = await adapter.fetch_messages_concurrently(
+            start_time=start_time,
+            end_time=end_time,
+            limit_per_chat=100
+        )
         
-        print(f"   总共采集到 {len(all_messages)} 条消息")
+        print(f"   总共采集到 {len(unified_messages)} 条去重后的消息")
         
         # 2. 保存消息
         print("\n2. 💾 保存消息到数据库...")
-        saved_count = save_messages(all_messages)
-        print(f"   保存了 {saved_count} 条去重后的消息")
+        saved_count = 0
+        for msg in unified_messages:
+            # 检查是否已存在（storage.save_message 内部使用 INSERT OR IGNORE）
+            # 注意：UnifiedMessage 的 id 在 adapter 中被设置为 "{account_id}:{msg_id}"
+            # 但在 messages 表中 UNIQUE(platform, chat_id, external_id) 才是真正的唯一键
+            storage.save_message(msg)
+            saved_count += 1 # 这里其实无法精确知道是否真的插入了，但 save_message 是幂等的
+        
+        print(f"   处理了 {saved_count} 条消息")
         
         # 3. AI 分析
         print("\n3. 🤖 执行 AI 深度分析...")
@@ -400,6 +394,7 @@ async def main():
             print(f"   发现 {len(unprocessed)} 条待分析消息，正在处理...")
             for row in unprocessed[:10]: # 每次流程最多处理10条新消息
                 try:
+                    # 转换行数据为 UnifiedMessage 以便 summarizer 处理
                     msg = UnifiedMessage(
                         id=row['internal_id'],
                         platform=Platform(row['platform']),
@@ -420,6 +415,9 @@ async def main():
                     print(f"   ❌ 分析失败: {e}")
         else:
             print("   没有待分析的消息")
+
+        # 4. 获取已分析的消息并推送/归档
+        # ... (后续逻辑保持基本一致)
 
         # 4. 获取最后三条已分析的消息
         print("\n4. 📊 获取已分析消息...")
@@ -463,8 +461,6 @@ async def main():
         print(f"❌ 运行失败: {e}")
         import traceback
         traceback.print_exc()
-    finally:
-        await client.disconnect()
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -2,10 +2,16 @@
 .env
 *.session
 *.session-journal
-data/*.db
+data/
 obsidian-tem/
 __pycache__/
 *.pyc
+*.log
+setting_*.md
 user_instructions.md
 project_status.md
 readme1.md
+.venv/
+node_modules/
+dist/
+build/

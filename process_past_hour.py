@@ -17,10 +17,11 @@ from typing import List, Dict, Any
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from dotenv import load_dotenv
-from src.config import load_config
+load_dotenv(override=True)
+
+from src.config import config
 from src.processors.summarizer import AISummarizer
-from collect_compatible import collect_from_group
-from telethon import TelegramClient
+from src.adapters.telegram_adapter_v2 import TelegramMultiAccountAdapter
 
 # Configure logging
 logging.basicConfig(
@@ -133,12 +134,7 @@ async def push_to_telegram(report_content: str, config):
         logger.error(f"推送 Telegram 失败: {e}")
 
 async def main():
-    logger.info("开始执行过去一小时信息处理脚本")
-    
-    # 1. 重新加载配置
-    load_dotenv(override=True)
-    config = load_config()
-    logger.info(f"重新加载配置完成，待监控群组: {len(config.collector_config.monitored_chats)} 个")
+    logger.info("开始执行过去一小时信息处理脚本 (多账号并发版)")
     
     # 初始化 AI 总结器
     summarizer = AISummarizer(
@@ -147,64 +143,51 @@ async def main():
     )
     
     # 2. 采集消息
-    if not config.collector_accounts:
-        logger.error("没有配置采集账号")
-        return
+    async with TelegramMultiAccountAdapter() as adapter:
+        logger.info("正在并发采集北京时间 12:00 - 13:00 的消息...")
         
-    collector_account = config.collector_accounts[0]
-    client = TelegramClient(
-        collector_account.session_name,
-        collector_account.api_id,
-        collector_account.api_hash
-    )
-    
-    all_chat_contents = []
-    
-    try:
-        await client.connect()
-        if not await client.is_user_authorized():
-            logger.error("采集账号未认证")
-            return
-            
-        # 并发限制，避免被封
-        semaphore = asyncio.Semaphore(3)
+        # 强制设置采集窗口为 12:00 到 13:00 (北京时间)
+        now = datetime.now()
+        start_time = now.replace(hour=12, minute=0, second=0, microsecond=0)
+        end_time = now.replace(hour=13, minute=0, second=0, microsecond=0)
         
-        async def fetch_chat(chat_url):
-            async with semaphore:
-                messages = await collect_from_group(client, chat_url, hours_back=1)
-                if messages:
-                    # 按照群组聚合内容
-                    chat_name = messages[0]['chat_name']
-                    combined_text = "\n".join([f"- {m['content']}" for m in messages])
-                    return f"### Group: {chat_name}\n{combined_text}\n"
-                return ""
-
-        tasks = [fetch_chat(url) for url in config.collector_config.monitored_chats]
-        results = await asyncio.gather(*tasks)
+        # 如果当前还没到 13:00，或者已经过了很久，这里可能需要逻辑调整
+        # 但按照用户要求，我们直接锁死这个时间段进行补采
         
-        aggregated_input = "\n".join([r for r in results if r])
+        unified_messages = await adapter.fetch_messages_concurrently(
+            start_time=start_time,
+            end_time=end_time,
+            limit_per_chat=100 # 增加上限，防止消息太多被截断
+        )
         
-        if not aggregated_input:
+        if not unified_messages:
             logger.info("过去一小时没有新消息，跳过处理")
             return
             
-        # 3. 生成全局摘要
+        # 3. 按群组聚合内容以便生成全局摘要
+        chat_contents = {}
+        for msg in unified_messages:
+            chat_name = msg.chat_name
+            if chat_name not in chat_contents:
+                chat_contents[chat_name] = []
+            chat_contents[chat_name].append(f"- {msg.content}")
+            
+        aggregated_input = ""
+        for chat_name, contents in chat_contents.items():
+            aggregated_input += f"### Group: {chat_name}\n" + "\n".join(contents) + "\n\n"
+        
+        # 4. 生成全局摘要
         logger.info("正在生成全局摘要...")
         summary_result = await generate_global_summary(summarizer, aggregated_input)
         report_content = summary_result['content']
         
-        # 4. 保存到 Obsidian
+        # 5. 保存到 Obsidian
         save_to_obsidian(report_content)
         
-        # 5. 推送到 Telegram
-        await push_to_telegram(report_content, config)
-        
-    except Exception as e:
-        logger.error(f"运行脚本出错: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        await client.disconnect()
+        # 6. 推送到 Telegram
+        await adapter.send_digest_to_channel(f"📊 **全局信息简报 (过去 1 小时)**\n\n{report_content}")
+        logger.info("简报已推送到 Telegram")
 
 if __name__ == "__main__":
     asyncio.run(main())
+

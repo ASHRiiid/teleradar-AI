@@ -8,7 +8,8 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
-load_dotenv()
+# 允许覆盖环境变量以确保配置最新
+load_dotenv(override=True)
 
 
 @dataclass
@@ -19,6 +20,7 @@ class TelegramAccountConfig:
     api_hash: str
     phone: str
     session_name: str  # 会话文件名称
+    monitored_chats: List[str] = None  # 该账号特有的监控群组列表
 
 
 @dataclass
@@ -81,9 +83,9 @@ def _safe_int(value: Optional[str]) -> Optional[int]:
 def load_config() -> AppConfig:
     """从环境变量加载配置"""
     
-    # 解析监控的群组
-    monitored_chats_str = os.getenv("MONITORED_CHATS", "")
-    monitored_chats = [chat.strip() for chat in monitored_chats_str.split(",") if chat.strip()]
+    # 解析全局监控的群组 (作为所有账号的默认或公共列表)
+    global_monitored_chats_str = os.getenv("MONITORED_CHATS", "")
+    global_monitored_chats = [chat.strip() for chat in global_monitored_chats_str.split(",") if chat.strip()]
     
     # 主账号配置
     main_account = TelegramAccountConfig(
@@ -91,12 +93,20 @@ def load_config() -> AppConfig:
         api_id=int(os.getenv("TELEGRAM_MAIN_API_ID", "0")),
         api_hash=os.getenv("TELEGRAM_MAIN_API_HASH", ""),
         phone=os.getenv("TELEGRAM_MAIN_PHONE", ""),
-        session_name="main_session"
+        session_name="main_session",
+        monitored_chats=[]
     )
     
     # 采集账号配置
     collector_accounts = []
     
+    # 采集账号读取函数
+    def _get_account_chats(account_id: str) -> List[str]:
+        chats_str = os.getenv(f"MONITORED_CHATS_{account_id.upper()}", "")
+        if chats_str:
+            return [chat.strip() for chat in chats_str.split(",") if chat.strip()]
+        return []
+
     # 采集账号1
     collector1_api_id = os.getenv("TELEGRAM_COLLECTOR1_API_ID")
     if collector1_api_id:
@@ -105,7 +115,8 @@ def load_config() -> AppConfig:
             api_id=int(collector1_api_id),
             api_hash=os.getenv("TELEGRAM_COLLECTOR1_API_HASH", ""),
             phone=os.getenv("TELEGRAM_COLLECTOR1_PHONE", ""),
-            session_name="collector1_session"
+            session_name="collector1_session",
+            monitored_chats=_get_account_chats("collector1")
         ))
     
     # 采集账号2
@@ -116,12 +127,13 @@ def load_config() -> AppConfig:
             api_id=int(collector2_api_id),
             api_hash=os.getenv("TELEGRAM_COLLECTOR2_API_HASH", ""),
             phone=os.getenv("TELEGRAM_COLLECTOR2_PHONE", ""),
-            session_name="collector2_session"
+            session_name="collector2_session",
+            monitored_chats=_get_account_chats("collector2")
         ))
     
     # 采集配置
     collector_config = CollectorConfig(
-        monitored_chats=monitored_chats,
+        monitored_chats=global_monitored_chats,
         max_messages_per_chat=100,
         deduplicate_by_content=True,
         deduplicate_by_url=True

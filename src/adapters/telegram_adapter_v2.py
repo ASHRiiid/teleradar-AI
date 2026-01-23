@@ -97,28 +97,59 @@ class TelegramClientSession:
         
         messages = []
         try:
+            # 尝试解析标识符，增强容错性
+            target = chat_identifier
+            if isinstance(chat_identifier, str):
+                if chat_identifier.startswith("@"):
+                    target = chat_identifier
+                elif chat_identifier.replace("-", "").isdigit():
+                    # 纯数字标识符，转为整数
+                    target = int(chat_identifier)
+                elif "|" in chat_identifier:
+                    # 如果包含了名字，只取最后一部分标识符
+                    target = chat_identifier.split("|")[-1].strip()
+                    if target.replace("-", "").isdigit():
+                        target = int(target)
+            
             # 获取聊天实体
-            chat = await self.client.get_entity(chat_identifier)
+            try:
+                chat = await self.client.get_entity(target)
+            except ValueError:
+                # 如果找不到实体（通常是数字 ID 未缓存），尝试拉取对话列表刷新缓存
+                logger.info(f"账号 {self.account_config.account_id} 正在通过对话列表刷新实体缓存...")
+                await self.client.get_dialogs()
+                chat = await self.client.get_entity(target)
             
             # 获取消息
+            # reverse=False (默认): 从 offset_date 向过去扫描
+            # offset_date: 扫描的起点
             async for message in self.client.iter_messages(
                 chat,
                 offset_date=end_time,
-                reverse=True,
+                reverse=False,
                 limit=limit
             ):
                 if not isinstance(message, TelethonMessage):
                     continue
                     
-                # 检查消息时间是否在指定范围内
-                message_time = message.date.replace(tzinfo=None)
+                # 【关键修复】处理时区转换
+                # Telegram 返回的是 UTC 时间，需要转换为本地时间进行比较
+                message_time_utc = message.date
+                # 转换为本地时间 (CST/北京时间)
+                message_time = message_time_utc.astimezone().replace(tzinfo=None)
+                
+                # 如果消息比开始时间还早，说明已经扫完窗口了
                 if message_time < start_time:
+                    logger.debug(f"消息时间 {message_time} 早于开始时间 {start_time}，停止扫描")
                     break
+                
                 if message_time > end_time:
                     continue
                 
                 # 转换为统一消息格式
                 unified_msg = self._convert_to_unified_message(message, chat_identifier)
+                # 确保统一消息里的时间也是本地时间
+                unified_msg.timestamp = message_time
                 messages.append(unified_msg)
                 
             logger.info(f"账号 {self.account_config.account_id} 从 {chat_identifier} 获取到 {len(messages)} 条消息")
@@ -147,30 +178,43 @@ class TelegramClientSession:
         links = []
         if message.entities:
             for entity in message.entities:
-                if hasattr(entity, 'url'):
+                if hasattr(entity, 'url') and entity.url:
                     links.append(entity.url)
         
-        # 提取回复消息的文本（如果有）
-        reply_text = ""
-        if message.reply_to and message.reply_to.reply_to_msg_id:
-            reply_text = f"[回复消息ID: {message.reply_to.reply_to_msg_id}]"
-        
-        # 创建统一消息
+        # 获取群组/频道名称
+        chat_name = "Unknown Chat"
+        if hasattr(message.chat, 'title'):
+            chat_name = message.chat.title
+        elif hasattr(message.chat, 'first_name'):
+            chat_name = message.chat.first_name
+            
+        # 获取作者名称
+        author_name = "Unknown"
+        if message.sender:
+            if hasattr(message.sender, 'title'):
+                author_name = message.sender.title
+            elif hasattr(message.sender, 'first_name'):
+                first = message.sender.first_name or ""
+                last = getattr(message.sender, 'last_name', "") or ""
+                author_name = f"{first} {last}".strip() or "Unknown"
+
+        # 创建统一消息 (严格匹配 src/models.py)
         return UnifiedMessage(
-            source=Platform.TELEGRAM,
-            source_id=f"{self.account_config.account_id}:{message.id}",
+            id=f"{self.account_config.account_id}:{message.id}",
+            platform=Platform.TELEGRAM,
+            external_id=str(message.id),
             content=text,
-            timestamp=message.date.replace(tzinfo=None),
-            author=str(message.sender_id) if message.sender_id else "unknown",
-            metadata={
-                'chat': source_chat,
+            author_id=str(message.sender_id) if message.sender_id else "unknown",
+            author_name=author_name,
+            timestamp=message.date.astimezone().replace(tzinfo=None),
+            chat_id=str(message.chat_id),
+            chat_name=chat_name,
+            urls=links,
+            raw_metadata={
                 'collector_account': self.account_config.account_id,
                 'views': message.views or 0,
                 'forwards': message.forwards or 0,
-                'replies': message.replies.replies if message.replies else 0,
-                'links': links,
-                'reply_text': reply_text,
-                'raw_message': str(message.to_dict())
+                'reply_to': message.reply_to_msg_id if message.reply_to else None
             }
         )
     
@@ -266,33 +310,56 @@ class TelegramMultiAccountAdapter:
     
     async def fetch_messages_concurrently(
         self,
-        chat_identifiers: List[str],
-        start_time: datetime,
-        end_time: datetime,
+        chat_identifiers: Optional[List[str]] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
         limit_per_chat: int = 100
     ) -> List[UnifiedMessage]:
         """
         并发从多个账号获取消息，并进行去重
         
         Args:
-            chat_identifiers: 群组标识符列表
-            start_time: 开始时间
-            end_time: 结束时间
+            chat_identifiers: 群组标识符列表。如果为 None，则使用各账号配置的群组。
+            start_time: 开始时间。如果为 None，默认为 24 小时前。
+            end_time: 结束时间。如果为 None，默认为现在。
             limit_per_chat: 每个群组最大消息数量
             
         Returns:
             去重后的 UnifiedMessage 列表
         """
+        if not end_time:
+            end_time = datetime.now()
+        if not start_time:
+            start_time = end_time - timedelta(hours=24)
+            
         all_messages = []
-        
-        # 为每个采集账号创建采集任务
         fetch_tasks = []
-        for session in self.collector_sessions.values():
-            for chat_identifier in chat_identifiers:
+
+        for account_id, session in self.collector_sessions.items():
+            # 确定该账号要采集的群组
+            target_chats = []
+            if chat_identifiers:
+                # 如果外部传入了列表，则所有账号都采集这个列表
+                target_chats = chat_identifiers
+            else:
+                # 否则使用账号专属列表，如果没有，则使用全局列表
+                target_chats = session.account_config.monitored_chats
+                if not target_chats:
+                    target_chats = config.collector_config.monitored_chats
+            
+            if not target_chats:
+                logger.warning(f"账号 {account_id} 没有配置监控群组，跳过")
+                continue
+
+            for chat_identifier in target_chats:
                 fetch_tasks.append(
                     session.fetch_messages(chat_identifier, start_time, end_time, limit_per_chat)
                 )
         
+        if not fetch_tasks:
+            logger.info("没有采集任务需要执行")
+            return []
+
         # 并发执行所有采集任务
         results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
         
@@ -350,13 +417,13 @@ class TelegramMultiAccountAdapter:
             keys.append(f"content:{content_hash}")
         
         # 按URL去重
-        if config.collector_config.deduplicate_by_url and message.metadata.get('links'):
-            url_hash = hashlib.md5('|'.join(sorted(message.metadata['links'])).encode()).hexdigest()
+        if config.collector_config.deduplicate_by_url and message.urls:
+            url_hash = hashlib.md5('|'.join(sorted(message.urls)).encode()).hexdigest()
             keys.append(f"url:{url_hash}")
         
         # 如果没有任何去重条件，使用消息ID
         if not keys:
-            keys.append(f"id:{message.source_id}")
+            keys.append(f"id:{message.id}")
         
         return '|'.join(keys)
     
