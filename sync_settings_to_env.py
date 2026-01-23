@@ -2,11 +2,11 @@ import os
 import re
 
 def fix_id_format(identifier: str) -> str:
-    """处理标识符，如果是纯数字则添加 -100 前缀"""
+    """处理标识符，如果是 10 位纯正整数则添加 -100 前缀"""
     identifier = identifier.strip()
-    if identifier.isdigit() and not identifier.startswith("-"):
-        if len(identifier) >= 8:
-            return f"-100{identifier}"
+    # 仅当它是恰好 10 位数字的正整数时才添加 -100 (超级群组常见格式)
+    if identifier.isdigit() and len(identifier) == 10:
+        return f"-100{identifier}"
     return identifier
 
 def extract_from_md(file_path: str) -> list:

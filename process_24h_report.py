@@ -45,25 +45,27 @@ async def generate_global_summary(summarizer, aggregated_text):
     • 精炼: 使用简单的列表，禁止冗长描述。
     • 突出重点: 关键项目名、代币符号、具体数字使用简单强调。
     • 不用保留来源: 简报中不用保留消息的来源群组名。
-    • 时区一致: 所有时间点必须明确为北京时间 (UTC+8)。
+    • 时区一致: 所有时间点明确为北京时间 (UTC+8)。
     • 突出人数: 每一条信息后面用【x人，x视角】这个格式来说明有多少人讨论过这条，以及有多少不同的视角
+    • 结构清晰: 按照分类排版，严禁在末尾提供重复的"总结"或"要点"部分。
+    • 严禁长分隔符: 严禁使用过长的装饰性分隔符（如长达整行的 '━' 或 '█'），因为它们在移动端 Telegram 上会导致显示错乱。如有必要，仅使用极短的分隔线。
 
     常见问题处理
-    • 链接处理: 识别消息中的链接，并在摘要中说明该链接的内容（如：研报链接、推特链接）。
+    • 链接处理: 识别消息中的链接，并在摘要中说明该链接的内容。
     • 多语言处理: 无论原始消息是何种语言，简报输出统一使用简体中文。
 
     特别注意
     • 不要提及"社区氛围与诈骗警告"、"操作与工具咨询"、"诈骗警惕性高"这类信息
-    • 不要使用"好的，作为专业的区块链投研助手，我已根据您提供的多源碎片化信息，整理并提炼出以下深度简报。"这样的开头
+    • 不要使用"好的，作为专业的..."这样的废话开头
     • Telegram推送的消息严禁使用md语法，使用简单的数字序号、分点、冒号、空一行等方式来表达
 
     格式要求示例：
-    ━━━━━━━━⚡ 速览要点━━━━━━━━
-
+    ⚡ 速览要点
+    
     • 市场情绪谨慎，价格回调后波动加剧，行业演变指向应用价值
-
+    
     • 白银与黄金价格飙升引发交易与做空讨论
-
+    
     • 二级关注 lit / hype
 
     采集到的原始信息如下：
@@ -141,21 +143,32 @@ async def main():
         if not unified_messages:
             logger.info("该时间段内没有抓取到新消息")
             return
-            
-        logger.info(f"成功抓取 {len(unified_messages)} 条去重后的消息，正在聚合内容...")
-        
-        # 按群组聚合
+
         chat_contents = {}
         for msg in unified_messages:
-            chat_name = msg.chat_name
+            chat_name = msg.chat_name or msg.chat_id
             if chat_name not in chat_contents:
                 chat_contents[chat_name] = []
-            chat_contents[chat_name].append(f"- {msg.content}")
+            chat_contents[chat_name].append(msg.content)
             
         aggregated_input = ""
+        total_messages_count = 0
+        MAX_TOTAL_MESSAGES = 1000
+
         for chat_name, contents in chat_contents.items():
-            # 每个群组只取前 50 条，防止输入过大
-            aggregated_input += f"### Group: {chat_name}\n" + "\n".join(contents[:50]) + "\n\n"
+            if total_messages_count >= MAX_TOTAL_MESSAGES:
+                logger.warning(f"已达到最大消息限制 {MAX_TOTAL_MESSAGES}，停止聚合后续内容")
+                break
+                
+            # 每个群组只取前 50 条，同时受总数限制
+            remaining_quota = MAX_TOTAL_MESSAGES - total_messages_count
+            to_take = min(50, remaining_quota)
+            
+            chat_slice = contents[:to_take]
+            aggregated_input += f"### Group: {chat_name}\n" + "\n".join(chat_slice) + "\n\n"
+            total_messages_count += len(chat_slice)
+        
+        logger.info(f"成功抓取 {len(unified_messages)} 条去重后的消息，最终聚合了 {total_messages_count} 条消息进行摘要")
         
         logger.info("正在调用 AI 生成深度简报...")
         summary_result = await generate_global_summary(summarizer, aggregated_input)

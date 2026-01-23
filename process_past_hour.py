@@ -52,6 +52,9 @@ async def generate_global_summary(summarizer: AISummarizer, aggregated_content: 
     - 突出过去一小时的热点和突发动态。
     - 如果没有提到某些部分，请注明“未提及”。
     - 输出格式为 Markdown，包含以上四个标题。
+    - **严禁长分隔符**: 严禁使用过长的装饰性分隔符（如 '━━━━━━━━'），因为它们在移动端 Telegram 上会导致显示错乱。
+    - **禁止冗余总结**: 严禁在末尾提供重复的"总结"或"要点"部分。
+    - 请直接输出内容，不要有任何废话开头。
 
     请直接输出 Markdown 内容。
     """

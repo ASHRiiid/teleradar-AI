@@ -6,6 +6,7 @@ Telegram 适配器 V2
 import asyncio
 import hashlib
 import logging
+import html
 from typing import List, Dict, Optional, Set
 from datetime import datetime
 from dataclasses import dataclass
@@ -112,13 +113,36 @@ class TelegramClientSession:
                         target = int(target)
             
             # 获取聊天实体
-            try:
-                chat = await self.client.get_entity(target)
-            except ValueError:
-                # 如果找不到实体（通常是数字 ID 未缓存），尝试拉取对话列表刷新缓存
+            targets_to_try = [target]
+            if isinstance(target, int) and target > 0:
+                targets_to_try.append(int(f"-100{target}"))
+            
+            chat = None
+            last_err = None
+            
+            # 1. 尝试直接获取
+            for t in targets_to_try:
+                try:
+                    chat = await self.client.get_entity(t)
+                    break
+                except Exception as e:
+                    last_err = e
+                    continue
+            
+            # 2. 如果失败，尝试拉取对话列表刷新缓存后再试
+            if not chat:
                 logger.info(f"账号 {self.account_config.account_id} 正在通过对话列表刷新实体缓存...")
                 await self.client.get_dialogs()
-                chat = await self.client.get_entity(target)
+                for t in targets_to_try:
+                    try:
+                        chat = await self.client.get_entity(t)
+                        break
+                    except Exception as e:
+                        last_err = e
+                        continue
+            
+            if not chat:
+                raise last_err or ValueError(f"无法找到实体: {target}")
             
             # 获取消息
             # reverse=False (默认): 从 offset_date 向过去扫描
@@ -239,17 +263,27 @@ class TelegramClientSession:
             await self.connect()
         
         try:
+            # 处理 HTML 转义
+            final_text = text
+            if parse_mode == "HTML":
+                final_text = html.escape(text)
+            
             # 获取频道实体
             channel = await self.client.get_entity(channel_identifier)
             
-            # 发送消息
-            await self.client.send_message(
-                channel,
-                text,
-                parse_mode=parse_mode
-            )
+            # 分段发送 (Telegram 限制单条消息约 4096 字符)
+            MAX_LENGTH = 4000
+            chunks = [final_text[i:i + MAX_LENGTH] for i in range(0, len(final_text), MAX_LENGTH)]
             
-            logger.info(f"账号 {self.account_config.account_id} 消息已发送到频道 {channel_identifier}")
+            for i, chunk in enumerate(chunks):
+                logger.info(f"账号 {self.account_config.account_id} 正在发送消息分片 {i+1}/{len(chunks)} 到频道 {channel_identifier}")
+                await self.client.send_message(
+                    channel,
+                    chunk,
+                    parse_mode=parse_mode
+                )
+                logger.info(f"账号 {self.account_config.account_id} 消息分片 {i+1}/{len(chunks)} 发送成功")
+            
             return True
             
         except Exception as e:
