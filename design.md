@@ -67,7 +67,7 @@
 
 ### 启动方式
 系统支持两种启动方式：
-1. **手动启动**：双击 `generate_briefing.command`（macOS桌面脚本）
+1. **手动启动**：双击 `launch.command`（macOS桌面脚本）
 2. **自动启动**：通过cron定时任务或AI代理调用
 
 ### 完整执行流程
@@ -211,7 +211,7 @@
 
 ## 🚀 自动化脚本说明
 
-### generate_briefing.command (macOS桌面脚本)
+### launch.command (macOS桌面脚本，由 generate_briefing.command 重命名)
 ```bash
 # 功能特点
 1. 双击即可运行完整流程
@@ -220,7 +220,7 @@
 4. 运行后保持终端窗口
 
 # 执行权限设置
-chmod +x generate_briefing.command
+chmod +x launch.command
 
 # 桌面使用
 1. 复制到桌面
@@ -231,7 +231,7 @@ chmod +x generate_briefing.command
 ### 定时任务配置 (cron)
 ```bash
 # 每天北京时间8:00运行
-0 0 * * * cd /path/to/project && ./generate_briefing.command
+0 0 * * * cd /path/to/project && ./launch.command
 
 # 或使用Python脚本
 0 0 * * * cd /path/to/project && python3 process_24h_report.py

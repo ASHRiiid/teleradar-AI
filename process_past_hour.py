@@ -185,7 +185,7 @@ async def main():
         save_to_obsidian(report_content)
         
         # 6. 推送到 Telegram
-        await adapter.send_digest_to_channel(f"📊 **全局信息简报 (过去 1 小时)**\n\n{report_content}")
+        await adapter.send_digest_to_channel(f"📊 全局信息简报 (过去 1 小时)\n\n{report_content}")
         logger.info("简报已推送到 Telegram")
 
 if __name__ == "__main__":

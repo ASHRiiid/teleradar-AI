@@ -32,13 +32,63 @@ cp .env.example .env
 # 编辑 .env 文件，填入你的 API 密钥
 
 # 3. 设置桌面脚本
-chmod +x generate_briefing.command
+chmod +x launch.command
 
 # 4. 运行（三种方式任选）
 #    a) 双击桌面脚本（复制到桌面后双击）
-#    b) 命令行运行: ./generate_briefing.command
-#    c) 定时任务: 0 0 * * * cd /path/to/project && ./generate_briefing.command
+#    b) 命令行运行: ./launch.command
+#    c) 定时任务: 0 0 * * * cd /path/to/project && ./launch.command
 ```
+
+## 🤖 自动化系统
+
+为了实现真正的“无人值守”运行，系统配备了针对 macOS 优化的自动化执行方案。即使 MacBook 处于合盖睡眠状态，也能每天定时唤醒并静默执行任务。
+
+### 核心功能逻辑
+
+1.  **智能定时唤醒**：利用 macOS 的 `pmset` 电源管理工具，每天 08:00 (可配置) 自动将系统从睡眠状态唤醒。
+2.  **状态感知检测**：
+    -   智能判断电脑是否正在被用户使用（基于 `ioreg` 检测空闲时间）。
+    -   如果在运行时间内电脑正在使用中，脚本将以普通模式运行；如果处于闲置，则进行静默执行。
+3.  **网络自动验证**：唤醒后通过 `baidu.com` 验证网络连通性，确保网络服务已就绪，连接成功后自动等待 5 秒以确保稳定。
+4.  **超时与防卡死**：内置 5 分钟强制超时保护机制，防止因网络波动或接口响应过慢导致的脚本僵死。
+5.  **显示器控制优化**：针对合盖状态进行了优化，在自动化执行过程中尽量避免非必要的显示器唤醒。
+
+### 文件结构说明 (`/auto`)
+
+-   `setup_auto.sh`：**自动化管理工具**。提供安装、卸载及状态查询一键化操作。
+-   `auto_wake_run.sh`：**执行包装脚本**。包含网络检测、超时保护及状态感知的核心逻辑。
+-   `com.user.autowake.plist`：**系统服务配置**。定义了 launchd 的调度规则。
+-   `test_auto.sh`：**自动化测试工具**。用于验证权限、网络检查及状态检测功能是否正常。
+-   `auto_wake.log`：**运行日志**。记录每次自动唤醒后的执行详情。
+
+### 安装与配置
+
+```bash
+# 1. 安装自动化任务 (需要输入系统密码以配置 pmset)
+bash auto/setup_auto.sh install
+
+# 2. 查看当前自动化状态
+bash auto/setup_auto.sh status
+
+# 3. (可选) 卸载自动化任务
+bash auto/setup_auto.sh uninstall
+```
+
+### 测试与监控
+
+-   **功能自检**：运行 `bash auto/test_auto.sh` 可以验证整个自动化链路的可靠性。
+-   **日志审计**：查看 `auto/auto_wake.log` 了解详细运行历史。
+-   **电源计划查看**：执行 `pmset -g sched` 查看系统底层的定时唤醒安排。
+
+### 故障排除指南
+
+| 现象 | 可能原因 | 解决方法 |
+| :--- | :--- | :--- |
+| 任务未准时运行 | `launchd` 任务未加载或电源计划失效 | 运行 `bash auto/setup_auto.sh status` 检查并重新执行 install |
+| 提示网络验证失败 | 唤醒后网络连接缓慢或代理未就绪 | 在 `auto_wake_run.sh` 中增加 `MAX_RETRIES` 或检查网络环境 |
+| 脚本进程残留 | 超时保护未能正常杀掉子进程 | 检查脚本中的 `cleanup` 函数权限，手动清理相关进程 |
+| 无法配置电源计划 | 权限不足或硬件不支持 | 确保以管理员权限运行，并检查 `pmset` 是否支持 repeat 模式 |
 
 #### 方式二：传统命令行运行
 ```bash
@@ -78,6 +128,7 @@ streamlit run web/dashboard.py
 │   ├── models.py           # 数据库模型与数据结构
 │   └── storage.py          # 数据库持久化操作 (SQLite)
 ├── web/                    # Streamlit Web 看板代码
+├── auto/                   # 自动化系统 (定时唤醒、网络验证、超时保护)
 ├── data/                   # 本地数据库存储 (raw_messages.db)
 ├── obsidian-tem/           # 自动生成的 Obsidian Markdown 报告
 ├── test/                   # 完善的测试套件

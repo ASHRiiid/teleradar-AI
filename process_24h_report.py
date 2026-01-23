@@ -26,36 +26,45 @@ async def generate_global_summary(summarizer, aggregated_text):
 
     请严格遵循以下整理逻辑：
 
-    ## 消息分类 (Categorization)
-    - **市场动态 (Market News)**: 重大政策、交易所公告、大额异动。
-    - **项目研报 (Project Alpha)**: 新项目上线、融资信息、深度技术解析。
-    - **链上异动 (On-chain Tracking)**: 巨鲸动向、Smart Money 追踪。
-    - **社区情绪 (Sentiment)**: 热门讨论话题、FOMO/FUD 情绪捕捉。
-    - **Meme/土狗 (Meme/Speculation)**: 整理出聊的最多的三个币的名字
+    消息分类 (Categorization)
+    • 市场动态 (Market News): 重大政策、交易所公告、大额异动。
+    • 项目研报 (Project Alpha): 新项目上线、融资信息、深度技术解析。
+    • 链上异动 (On-chain Tracking): 巨鲸动向、Smart Money 追踪。
+    • 社区情绪 (Sentiment): 热门讨论话题、FOMO/FUD 情绪捕捉。
+    • Meme/土狗 (Meme/Speculation): 整理出聊的最多的三个币的名字
 
-    ## 去重与聚合 (Deduplication & Aggregation)
-    - **跨群去重**: 多个频道转发同一条新闻时，只保留一条。
-    - **内容聚合**: 将同一个话题（如：某个特定项目的融资）下的多条评论聚合为一个综述。
+    去重与聚合 (Deduplication & Aggregation)
+    • 跨群去重: 多个频道转发同一条新闻时，只保留一条。
+    • 内容聚合: 将同一个话题（如：某个特定项目的融资）下的多条评论聚合为一个综述。
 
-    ## 质量过滤 (Filtering)
-    - **过滤噪音**: 剔除纯水聊、表情包回复、无意义的广告、重复的复读机内容。
-    - **优先级**: 优先保留带有链接、数据、深度分析或原创观点的消息。
+    质量过滤 (Filtering)
+    • 过滤噪音: 剔除纯水聊、表情包回复、无意义的广告、重复的复读机内容。
+    • 优先级: 优先保留带有链接、数据、深度分析或原创观点的消息。
 
-    ## 简报撰写准则
-    - **精炼**: 使用 Markdown 列表，禁止冗长描述。
-    - **突出重点**: 关键项目名、代币符号、具体数字使用 **加粗**。
-    - **不用保留来源**: 简报中不用保留消息的来源群组名。
-    - **时区一致**: 所有时间点必须明确为北京时间 (UTC+8)。
-    - **突出人数**: 每一条信息后面用【x人，x视角】这个格式来说明有多少人讨论过这条，以及有多少不同的视角
+    简报撰写准则
+    • 精炼: 使用简单的列表，禁止冗长描述。
+    • 突出重点: 关键项目名、代币符号、具体数字使用简单强调。
+    • 不用保留来源: 简报中不用保留消息的来源群组名。
+    • 时区一致: 所有时间点必须明确为北京时间 (UTC+8)。
+    • 突出人数: 每一条信息后面用【x人，x视角】这个格式来说明有多少人讨论过这条，以及有多少不同的视角
 
-    ## 常见问题处理
-    - **链接处理**: 识别消息中的链接，并在摘要中说明该链接的内容（如：研报链接、推特链接）。
-    - **多语言处理**: 无论原始消息是何种语言，简报输出统一使用 **简体中文**。
+    常见问题处理
+    • 链接处理: 识别消息中的链接，并在摘要中说明该链接的内容（如：研报链接、推特链接）。
+    • 多语言处理: 无论原始消息是何种语言，简报输出统一使用简体中文。
 
-    ## 特别注意
-    - 不要提及"社区氛围与诈骗警告"、"操作与工具咨询"、"诈骗警惕性高"这类信息
-    - 不要使用"好的，作为专业的区块链投研助手，我已根据您提供的多源碎片化信息，整理并提炼出以下深度简报。"这样的开头
-    - Telegram推送的消息不要使用md语法，简单的用序号、点、空格、空行来清晰表达
+    特别注意
+    • 不要提及"社区氛围与诈骗警告"、"操作与工具咨询"、"诈骗警惕性高"这类信息
+    • 不要使用"好的，作为专业的区块链投研助手，我已根据您提供的多源碎片化信息，整理并提炼出以下深度简报。"这样的开头
+    • Telegram推送的消息严禁使用md语法，使用简单的数字序号、分点、冒号、空一行等方式来表达
+
+    格式要求示例：
+    ━━━━━━━━⚡ 速览要点━━━━━━━━
+
+    • 市场情绪谨慎，价格回调后波动加剧，行业演变指向应用价值
+
+    • 白银与黄金价格飙升引发交易与做空讨论
+
+    • 二级关注 lit / hype
 
     采集到的原始信息如下：
     {aggregated_text}
@@ -96,13 +105,20 @@ async def main():
     for acc in config.collector_accounts:
         logger.info(f"账号 {acc.account_id} 监控群组数量: {len(acc.monitored_chats) if acc.monitored_chats else 0}")
     
-    # 设定北京时间范围
+    # 设定北京时间范围：前一天早上8点到当天早上8点
     now = datetime.now()
-    # 假设今天是 23 号
-    # 结束时间：2026-01-23 08:00:00
-    # 开始时间：2026-01-22 08:00:00
-    end_time = now.replace(hour=8, minute=0, second=0, microsecond=0)
-    start_time = end_time - timedelta(days=1)
+    
+    # 计算当天的8点（如果当前时间小于8点，则结束时间是昨天的8点）
+    today_8am = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    
+    # 如果当前时间小于8点，则结束时间是昨天的8点，开始时间是前天的8点
+    if now < today_8am:
+        end_time = today_8am - timedelta(days=1)
+        start_time = end_time - timedelta(days=1)
+    else:
+        # 当前时间大于等于8点，结束时间是今天的8点，开始时间是昨天的8点
+        end_time = today_8am
+        start_time = end_time - timedelta(days=1)
     
     logger.info(f"时间窗口 (北京时间): {start_time} 至 {end_time}")
     
@@ -150,7 +166,7 @@ async def main():
         save_to_obsidian(f"# 📊 24小时信息深度简报\n\n**周期**: {start_time} - {end_time}\n\n{report_content}", filename)
         
         # 推送到 Telegram
-        header = f"📊 **24小时信息深度简报**\n📅 {start_time.strftime('%m-%d 08:00')} ~ {end_time.strftime('%m-%d 08:00')}\n\n"
+        header = f"📊 24小时信息深度简报\n📅 {start_time.strftime('%m-%d 08:00')} ~ {end_time.strftime('%m-%d 08:00')}\n\n"
         await adapter.send_digest_to_channel(header + report_content)
         logger.info("简报已推送到 Telegram 频道")
 
