@@ -4,6 +4,7 @@
 """
 
 import os
+from datetime import datetime
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 from dotenv import load_dotenv
@@ -50,37 +51,26 @@ class AIConfig:
 
 @dataclass
 class AppConfig:
-    """应用主配置"""
-    # 主账号（用于推送）
+    """应用程序配置"""
     main_account: TelegramAccountConfig
-    
-    # 采集账号列表
     collector_accounts: List[TelegramAccountConfig]
-    
-    # 采集配置
-    collector_config: CollectorConfig
-    
-    # 推送配置
-    push_config: PushConfig
-    
-    # AI 配置
     ai_config: AIConfig
-    
-    # 其他配置
-    obsidian_vault_path: Optional[str] = None
+    collector_config: CollectorConfig
+    push_config: PushConfig
+    obsidian_vault_path: str = ""
     jina_reader_base_url: str = "https://r.jina.ai/"
-
-
-def _safe_int(value: Optional[str]) -> Optional[int]:
-    """安全地将字符串转换为整数"""
-    if not value:
-        return None
-    try:
-        return int(value)
-    except (ValueError, TypeError):
-        return None
+    
+    @property
+    def database_path(self) -> str:
+        """获取当前月份的数据库路径"""
+        now = datetime.now()
+        db_dir = "data"
+        if not os.path.exists(db_dir):
+            os.makedirs(db_dir)
+        return os.path.join(db_dir, f"raw_messages_{now.strftime('%Y_%m')}.db")
 
 def load_config() -> AppConfig:
+
     """从环境变量加载配置"""
     
     # 解析全局监控的群组 (作为所有账号的默认或公共列表)
@@ -165,6 +155,16 @@ def load_config() -> AppConfig:
     )
     
     return config
+
+
+def _safe_int(val: Optional[str]) -> Optional[int]:
+    """安全转换为整数"""
+    if val is None or not val.strip():
+        return None
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return None
 
 
 # 全局配置实例

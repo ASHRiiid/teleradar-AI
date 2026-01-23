@@ -36,7 +36,7 @@ def ensure_database():
     """确保数据库表存在"""
     os.makedirs('data', exist_ok=True)
     
-    conn = sqlite3.connect('data/raw_messages.db')
+    conn = sqlite3.connect(config.database_path)
     cursor = conn.cursor()
     
     # 检查表是否存在
@@ -140,7 +140,7 @@ def save_messages(messages: List[Dict[str, Any]]) -> int:
     if not messages:
         return 0
     
-    conn = sqlite3.connect('data/raw_messages.db')
+    conn = sqlite3.connect(config.database_path)
     cursor = conn.cursor()
     
     saved_count = 0
@@ -186,7 +186,7 @@ def save_messages(messages: List[Dict[str, Any]]) -> int:
 
 def get_last_three_messages() -> List[Dict[str, Any]]:
     """获取最后三条消息"""
-    conn = sqlite3.connect('data/raw_messages.db')
+    conn = sqlite3.connect(config.database_path)
     cursor = conn.cursor()
     
     cursor.execute('''
@@ -285,7 +285,7 @@ def create_obsidian_md(messages: List[Dict[str, Any]]) -> str:
     filepath = os.path.join(obsidian_dir, filename)
     
     # 获取数据库统计
-    conn = sqlite3.connect('data/raw_messages.db')
+    conn = sqlite3.connect(config.database_path)
     cursor = conn.cursor()
     cursor.execute('SELECT COUNT(*) FROM messages')
     total_count = cursor.fetchone()[0]
@@ -421,7 +421,7 @@ async def main():
 
         # 4. 获取最后三条已分析的消息
         print("\n4. 📊 获取已分析消息...")
-        conn = sqlite3.connect('data/raw_messages.db')
+        conn = sqlite3.connect(config.database_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute('''

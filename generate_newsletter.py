@@ -15,7 +15,7 @@ async def generate_daily_newsletter():
     
     # 1. 获取最近 24 小时已分析的消息
     time_threshold = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
-    conn = sqlite3.connect('data/raw_messages.db')
+    conn = sqlite3.connect(config.database_path)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute('''

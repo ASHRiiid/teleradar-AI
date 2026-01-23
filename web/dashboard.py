@@ -3,13 +3,14 @@ import sqlite3
 import pandas as pd
 import json
 from datetime import datetime
+from src.config import config
 
 # Page config
 st.set_page_config(page_title="Telegram AI Dashboard", page_icon="🤖", layout="wide")
 
 # Database connection
 def get_connection():
-    return sqlite3.connect('data/raw_messages.db')
+    return sqlite3.connect(config.database_path)
 
 # Load data
 def load_data():

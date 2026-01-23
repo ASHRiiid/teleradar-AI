@@ -38,7 +38,7 @@ def create_database():
     """创建数据库表"""
     os.makedirs('data', exist_ok=True)
     
-    conn = sqlite3.connect('data/raw_messages.db')
+    conn = sqlite3.connect(config.database_path)
     cursor = conn.cursor()
     
     # 创建消息表
@@ -71,7 +71,7 @@ def save_messages(messages: List[Message]):
         logger.info("没有新消息需要保存")
         return 0
     
-    conn = sqlite3.connect('data/raw_messages.db')
+    conn = sqlite3.connect(config.database_path)
     cursor = conn.cursor()
     
     saved_count = 0
@@ -117,7 +117,7 @@ def save_messages(messages: List[Message]):
     
     conn.commit()
     conn.close()
-    logger.info(f"保存了 {saved_count} 条去重后的消息到 data/raw_messages.db")
+    logger.info(f"保存了 {saved_count} 条去重后的消息到 {config.database_path}")
     return saved_count
 
 async def collect_messages():
@@ -171,7 +171,7 @@ async def collect_messages():
 
 def get_last_three_messages():
     """获取最后三条消息"""
-    conn = sqlite3.connect('data/raw_messages.db')
+    conn = sqlite3.connect(config.database_path)
     cursor = conn.cursor()
     
     cursor.execute('''
@@ -259,7 +259,7 @@ def create_obsidian_md(messages):
 ## 📊 采集统计
 - 总消息数: {len(messages)}
 - 采集时间范围: 过去24小时
-- 数据库文件: `data/raw_messages.db`
+- 数据库文件: `{config.database_path}`
 
 ## 📋 监控群组列表
 """
@@ -287,7 +287,7 @@ def create_obsidian_md(messages):
     md_content += f"""
 ## 🔧 系统信息
 - 项目路径: `{os.path.abspath('.')}`
-- 数据库路径: `{os.path.abspath('data/raw_messages.db')}`
+- 数据库路径: `{os.path.abspath(config.database_path)}`
 - 采集账号: {config.collector_accounts[0].phone if config.collector_accounts else '未配置'}
 - 推送频道: {config.push_config.channel_username}
 

@@ -20,16 +20,43 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 async def generate_global_summary(summarizer, aggregated_text):
-    """调用 AI 生成全局摘要"""
+    """调用 AI 生成全局摘要，遵循 setting_AI.md 中的逻辑"""
     prompt = f"""
     你是一个专业的区块链投研助手。请根据以下从多个 Telegram 群组采集到的碎片化信息，整理出一份深度简报。
-    
-    要求：
-    1. 按照“市场动态”、“热门项目”、“社区情绪”、“链上机会”等维度进行分类。
-    2. 提取最有价值的信息，忽略噪音。
-    3. 使用 Markdown 格式，语言简洁专业。
-    4. 必须使用中文。
-    
+
+    请严格遵循以下整理逻辑：
+
+    ## 消息分类 (Categorization)
+    - **市场动态 (Market News)**: 重大政策、交易所公告、大额异动。
+    - **项目研报 (Project Alpha)**: 新项目上线、融资信息、深度技术解析。
+    - **链上异动 (On-chain Tracking)**: 巨鲸动向、Smart Money 追踪。
+    - **社区情绪 (Sentiment)**: 热门讨论话题、FOMO/FUD 情绪捕捉。
+    - **Meme/土狗 (Meme/Speculation)**: 整理出聊的最多的三个币的名字
+
+    ## 去重与聚合 (Deduplication & Aggregation)
+    - **跨群去重**: 多个频道转发同一条新闻时，只保留一条。
+    - **内容聚合**: 将同一个话题（如：某个特定项目的融资）下的多条评论聚合为一个综述。
+
+    ## 质量过滤 (Filtering)
+    - **过滤噪音**: 剔除纯水聊、表情包回复、无意义的广告、重复的复读机内容。
+    - **优先级**: 优先保留带有链接、数据、深度分析或原创观点的消息。
+
+    ## 简报撰写准则
+    - **精炼**: 使用 Markdown 列表，禁止冗长描述。
+    - **突出重点**: 关键项目名、代币符号、具体数字使用 **加粗**。
+    - **不用保留来源**: 简报中不用保留消息的来源群组名。
+    - **时区一致**: 所有时间点必须明确为北京时间 (UTC+8)。
+    - **突出人数**: 每一条信息后面用【x人，x视角】这个格式来说明有多少人讨论过这条，以及有多少不同的视角
+
+    ## 常见问题处理
+    - **链接处理**: 识别消息中的链接，并在摘要中说明该链接的内容（如：研报链接、推特链接）。
+    - **多语言处理**: 无论原始消息是何种语言，简报输出统一使用 **简体中文**。
+
+    ## 特别注意
+    - 不要提及"社区氛围与诈骗警告"、"操作与工具咨询"、"诈骗警惕性高"这类信息
+    - 不要使用"好的，作为专业的区块链投研助手，我已根据您提供的多源碎片化信息，整理并提炼出以下深度简报。"这样的开头
+    - Telegram推送的消息不要使用md语法，简单的用序号、点、空格、空行来清晰表达
+
     采集到的原始信息如下：
     {aggregated_text}
     """
@@ -39,7 +66,7 @@ async def generate_global_summary(summarizer, aggregated_text):
         response = await summarizer.client.chat.completions.create(
             model="deepseek-chat",
             messages=[
-                {"role": "system", "content": "你是一个专业的区块链投研助手。"},
+                {"role": "system", "content": "你是一个专业的区块链投研助手，严格按照给定的整理逻辑生成简报。"},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.3

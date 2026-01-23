@@ -5,9 +5,14 @@ from typing import List, Optional
 import json
 from loguru import logger
 
+from src.config import config
+
 class Storage:
-    def __init__(self, db_path: str = "data/raw_messages.db"):
+    def __init__(self, db_path: Optional[str] = None):
         import os
+        if db_path is None:
+            db_path = config.database_path
+            
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self.db_path = db_path
         self._init_db()
