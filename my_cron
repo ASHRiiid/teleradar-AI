@@ -1,0 +1,1 @@
+@reboot cd /Users/axrid/Documents/EVM/information-ai/obsidian-tem/inbox-bot/ && /usr/bin/python3 telegram_inbox_service.py >> logs/cron.log 2>&1 &

@@ -21,24 +21,39 @@ def extract_from_md(file_path: str) -> list:
             if line and not line.startswith("#") and "|" in line:
                 parts = line.split("|")
                 identifier = parts[-1].strip()
+                # 移除行尾的注释（如果有的话）
+                if '#' in identifier:
+                    identifier = identifier.split('#')[0].strip()
                 monitored_chats.append(fix_id_format(identifier))
     return monitored_chats
 
 def sync_md_to_env():
-    c1_md = "setting_collector1.md"
-    c2_md = "setting_collector2.md"
+    c2_md = "setting_collector2.md"  # 账号2仍然使用md文件
     env_file = ".env"
     
-    # 1. 提取两个账号的配置
-    list1 = extract_from_md(c1_md)
+    # 1. 从.env文件读取账号1的现有配置
+    list1 = []
+    if os.path.exists(env_file):
+        with open(env_file, "r", encoding="utf-8") as f:
+            for line in f:
+                match = re.match(r"^#?\s*MONITORED_CHATS_COLLECTOR1\s*=\s*(.+)$", line)
+                if match:
+                    chats_str = match.group(1).strip()
+                    if chats_str:
+                        list1 = [fix_id_format(chat.strip()) for chat in chats_str.split(",")]
+                    break
+    
+    # 2. 从md文件提取账号2的配置
     list2_raw = extract_from_md(c2_md)
     
-    # 2. 优先级逻辑：如果账号 1 已经监控了，账号 2 就排除掉
+    # 3. 优先级逻辑：如果账号 1 已经监控了，账号 2 就排除掉
     final_list1 = list1
     final_list2 = [chat for chat in list2_raw if chat not in list1]
     
-    print(f"📊 账号 1 监控: {len(final_list1)} 个频道")
-    print(f"📊 账号 2 监控: {len(final_list2)} 个频道")
+    print(f"📊 账号 1 监控: {len(final_list1)} 个频道（从.env文件读取）")
+    print(f"📊 账号 2 监控: {len(final_list2)} 个频道（从setting_collector2.md读取）")
+    print(f"⚠️  注意：账号1的配置已由list_collector1_dialogs.py自动更新")
+    print(f"👉 如需修改账号1配置，请运行：python3 scripts/list_collector1_dialogs.py")
 
     # 3. 更新 .env 文件 (逐行处理更安全)
     if not os.path.exists(env_file):

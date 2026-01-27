@@ -1,4 +1,13 @@
 import asyncio
+import os
+import sys
+
+# Add project root to sys.path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from telethon import TelegramClient
 from src.config import config
 from telethon.tl.types import Channel, Chat

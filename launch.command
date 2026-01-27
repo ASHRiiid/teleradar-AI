@@ -56,16 +56,33 @@ fi
 # 检查采集账号配置并同步到环境变量
 echo "-----------------------------------------"
 echo "🔄 同步采集配置到环境变量..."
-if [ -f "sync_settings_to_env.py" ]; then
-    python3 sync_settings_to_env.py
+
+# 1. 首先更新采集账号1的群组列表（动态获取）
+echo "📱 步骤1: 更新采集账号1的群组列表..."
+if [ -f "scripts/list_collector1_dialogs.py" ]; then
+    echo "   🔍 正在获取账号1加入的所有群组..."
+    python3 scripts/list_collector1_dialogs.py
     if [ $? -eq 0 ]; then
-        echo "✅ 频道配置同步完成"
+        echo "   ✅ 账号1群组列表更新完成"
     else
-        echo "❌ 频道配置同步失败"
+        echo "   ⚠️  账号1群组列表更新失败，继续使用现有配置"
+    fi
+else
+    echo "   ⚠️  list_collector1_dialogs.py 不存在，跳过账号1更新"
+fi
+
+# 2. 同步所有配置到环境变量
+echo "📱 步骤2: 同步配置到环境变量..."
+if [ -f "scripts/sync_settings_to_env.py" ]; then
+    python3 scripts/sync_settings_to_env.py
+    if [ $? -eq 0 ]; then
+        echo "   ✅ 频道配置同步完成"
+    else
+        echo "   ❌ 频道配置同步失败"
         exit 1
     fi
 else
-    echo "⚠️  sync_settings_to_env.py 不存在，跳过配置同步"
+    echo "   ⚠️  sync_settings_to_env.py 不存在，跳过配置同步"
 fi
 
 # 显示采集账号配置状态
@@ -128,8 +145,24 @@ else
     exit $EXIT_CODE
 fi
 
-# 5. 流程完成
-echo "📋 步骤5: 流程完成"
+# 5. 管理旧简报文件
+echo "📋 步骤5: 管理旧简报文件"
+echo "-----------------------------------------"
+echo "📂 将超过一周的简报移动到 Oldsletters 文件夹..."
+
+if [ -f "scripts/manage_obsidian_reports.py" ]; then
+    python3 scripts/manage_obsidian_reports.py
+    if [ $? -eq 0 ]; then
+        echo "✅ 旧简报文件管理完成"
+    else
+        echo "⚠️  旧简报文件管理过程中出现警告，继续执行..."
+    fi
+else
+    echo "⚠️  manage_obsidian_reports.py 脚本不存在，跳过文件管理"
+fi
+
+# 6. 流程完成
+echo "📋 步骤6: 流程完成"
 echo "-----------------------------------------"
 echo "完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "✅ 区块链信息简报生成流程执行完毕"

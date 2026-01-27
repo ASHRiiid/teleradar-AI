@@ -1,5 +1,6 @@
 .DS_Store
 .env
+auto/
 *.session
 *.session-journal
 data/
@@ -8,6 +9,7 @@ __pycache__/
 *.pyc
 *.log
 setting_*.md
+*.backup
 user_instructions.md
 project_status.md
 readme1.md

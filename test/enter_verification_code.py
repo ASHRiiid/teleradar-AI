@@ -131,7 +131,7 @@ async def main():
         print("❌ 认证失败")
         print("\n建议：")
         print("1. 检查验证码是否正确")
-        print("2. 确保手机号 +86 15301305121 正确")
+        print("2. 确保手机号 +86 YOUR_PHONE_NUMBER 正确")
         print("3. 验证码可能已过期（5分钟有效期）")
 
 if __name__ == "__main__":

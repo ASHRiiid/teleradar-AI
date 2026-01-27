@@ -132,14 +132,33 @@ class TelegramClientSession:
             # 2. 如果失败，尝试拉取对话列表刷新缓存后再试
             if not chat:
                 logger.info(f"账号 {self.account_config.account_id} 正在通过对话列表刷新实体缓存...")
-                await self.client.get_dialogs()
+                # 获取所有对话，不仅是刷新缓存，还保留引用
+                dialogs = await self.client.get_dialogs()
+                
+                # 再次尝试直接获取
                 for t in targets_to_try:
                     try:
                         chat = await self.client.get_entity(t)
-                        break
-                    except Exception as e:
-                        last_err = e
+                        if chat:
+                            break
+                    except Exception:
                         continue
+                
+                # 3. 如果还是失败，手动遍历对话列表查找匹配的ID
+                if not chat:
+                    logger.info(f"直接获取失败，正在遍历对话列表查找 ID: {target}...")
+                    target_id_str = str(target).replace("-100", "")
+                    
+                    for dialog in dialogs:
+                        entity = dialog.entity
+                        # 检查 ID 是否匹配 (尝试多种格式)
+                        e_id = str(entity.id)
+                        if (e_id == str(target) or 
+                            e_id == target_id_str or 
+                            f"-100{e_id}" == str(target)):
+                            chat = entity
+                            logger.info(f"通过遍历列表找到了实体: {getattr(entity, 'title', 'Unknown')} (ID: {entity.id})")
+                            break
             
             if not chat:
                 raise last_err or ValueError(f"无法找到实体: {target}")
@@ -418,7 +437,7 @@ class TelegramMultiAccountAdapter:
         去重策略:
         1. 按内容哈希去重（如果配置启用）
         2. 按URL哈希去重（如果配置启用）
-        3. 保留时间最早的消息
+        3. 优先保留账号1的消息，如果来自同一账号则保留时间最早的消息
         """
         if not messages:
             return []
@@ -430,12 +449,29 @@ class TelegramMultiAccountAdapter:
             # 生成去重键
             dedup_key = self._generate_deduplication_key(message)
             
+            # 获取消息来源账号
+            collector_account = message.raw_metadata.get('collector_account', 'unknown')
+            
             # 检查是否已存在
             if dedup_key in dedup_map:
                 existing_msg = dedup_map[dedup_key]
-                # 保留时间最早的消息
-                if message.timestamp < existing_msg.timestamp:
+                existing_account = existing_msg.raw_metadata.get('collector_account', 'unknown')
+                
+                # 优先保留账号1的消息
+                if collector_account == 'collector1' and existing_account != 'collector1':
+                    # 当前消息来自账号1，已存在消息不是来自账号1，替换为账号1的消息
                     dedup_map[dedup_key] = message
+                elif collector_account != 'collector1' and existing_account == 'collector1':
+                    # 当前消息不是来自账号1，已存在消息来自账号1，保留账号1的消息
+                    pass
+                elif collector_account == existing_account:
+                    # 来自同一账号，保留时间最早的消息
+                    if message.timestamp < existing_msg.timestamp:
+                        dedup_map[dedup_key] = message
+                else:
+                    # 来自不同账号且都不是账号1，保留时间最早的消息
+                    if message.timestamp < existing_msg.timestamp:
+                        dedup_map[dedup_key] = message
             else:
                 dedup_map[dedup_key] = message
         

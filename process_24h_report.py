@@ -2,6 +2,8 @@ import asyncio
 import os
 import sys
 import logging
+import re
+import json
 from datetime import datetime, timedelta
 
 # Ensure we can import from src
@@ -19,57 +21,44 @@ from src.models import UnifiedMessage, Platform
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-async def generate_global_summary(summarizer, aggregated_text):
-    """调用 AI 生成全局摘要，遵循 setting_AI.md 中的逻辑"""
+async def generate_global_summary(summarizer, aggregated_text, message_list, start_time, end_time):
+    """调用 AI 生成全局摘要，遵循 setting_AI.md 中的逻辑，并识别基础操作问题"""
+    # 读取 setting_AI.md
+    try:
+        with open("setting_AI.md", "r", encoding="utf-8") as f:
+            setting_ai_content = f.read()
+    except Exception as e:
+        logger.error(f"读取 setting_AI.md 失败: {e}")
+        setting_ai_content = "无法读取 setting_AI.md，请检查文件是否存在。"
+
+    # 格式化时间范围
+    time_range_str = f"{start_time.strftime('%m%d %H:%M')} - {end_time.strftime('%m%d %H:%M')}"
+
+    # 为每条消息创建ID，方便AI引用，并包含用户以支持"2人以上讨论"的判断
+    messages_with_ids = []
+    for idx, msg in enumerate(message_list):
+        author = msg.author_name or "Unknown"
+        messages_with_ids.append(f"[ID:{idx}] [User:{author}] {msg.content}")
+    
+    messages_text = "\n".join(messages_with_ids)
+    
     prompt = f"""
     你是一个专业的区块链投研助手。请根据以下从多个 Telegram 群组采集到的碎片化信息，整理出一份深度简报。
 
-    请严格遵循以下整理逻辑：
+    请严格遵循以下设定（setting_AI.md）：
+    {setting_ai_content}
 
-    消息分类 (Categorization)
-    • 市场动态 (Market News): 重大政策、交易所公告、大额异动。
-    • 项目研报 (Project Alpha): 新项目上线、融资信息、深度技术解析。
-    • 链上异动 (On-chain Tracking): 巨鲸动向、Smart Money 追踪。
-    • 社区情绪 (Sentiment): 热门讨论话题、FOMO/FUD 情绪捕捉。
-    • Meme/土狗 (Meme/Speculation): 整理出聊的最多的三个币的名字
+    当前简报的时间范围是：{time_range_str}
+    请确保简报开头严格按照设定中的格式：📊 {time_range_str}
 
-    去重与聚合 (Deduplication & Aggregation)
-    • 跨群去重: 多个频道转发同一条新闻时，只保留一条。
-    • 内容聚合: 将同一个话题（如：某个特定项目的融资）下的多条评论聚合为一个综述。
+    采集到的原始信息如下（每条消息都有ID标记和用户名）：
+    {messages_text}
 
-    质量过滤 (Filtering)
-    • 过滤噪音: 剔除纯水聊、表情包回复、无意义的广告、重复的复读机内容。
-    • 优先级: 优先保留带有链接、数据、深度分析或原创观点的消息。
-
-    简报撰写准则
-    • 精炼: 使用简单的列表，禁止冗长描述。
-    • 突出重点: 关键项目名、代币符号、具体数字使用简单强调。
-    • 不用保留来源: 简报中不用保留消息的来源群组名。
-    • 时区一致: 所有时间点明确为北京时间 (UTC+8)。
-    • 突出人数: 每一条信息后面用【x人，x视角】这个格式来说明有多少人讨论过这条，以及有多少不同的视角
-    • 结构清晰: 按照分类排版，严禁在末尾提供重复的"总结"或"要点"部分。
-    • 严禁长分隔符: 严禁使用过长的装饰性分隔符（如长达整行的 '━' 或 '█'），因为它们在移动端 Telegram 上会导致显示错乱。如有必要，仅使用极短的分隔线。
-
-    常见问题处理
-    • 链接处理: 识别消息中的链接，并在摘要中说明该链接的内容。
-    • 多语言处理: 无论原始消息是何种语言，简报输出统一使用简体中文。
-
-    特别注意
-    • 不要提及"社区氛围与诈骗警告"、"操作与工具咨询"、"诈骗警惕性高"这类信息
-    • 不要使用"好的，作为专业的..."这样的废话开头
-    • Telegram推送的消息严禁使用md语法，使用简单的数字序号、分点、冒号、空一行等方式来表达
-
-    格式要求示例：
-    ⚡ 速览要点
-    
-    • 市场情绪谨慎，价格回调后波动加剧，行业演变指向应用价值
-    
-    • 白银与黄金价格飙升引发交易与做空讨论
-    
-    • 二级关注 lit / hype
-
-    采集到的原始信息如下：
-    {aggregated_text}
+    请返回一个JSON对象，格式如下：
+    {{
+      "summary": "完整的简报内容，按照 setting_AI.md 的格式要求",
+      "basic_question_ids": [0, 1, 2, ...]  // 基础操作问题的ID列表，如果没有则为空数组[]
+    }}
     """
     
     # 这里直接复用 summarizer 的底层调用
@@ -77,15 +66,209 @@ async def generate_global_summary(summarizer, aggregated_text):
         response = await summarizer.client.chat.completions.create(
             model="deepseek-chat",
             messages=[
-                {"role": "system", "content": "你是一个专业的区块链投研助手，严格按照给定的整理逻辑生成简报。"},
+                {"role": "system", "content": "你是一个专业的区块链投研助手，严格按照给定的整理逻辑生成简报，并返回JSON格式的结果。"},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.3
+            temperature=0.3,
+            response_format={"type": "json_object"}
         )
-        return {"content": response.choices[0].message.content}
+        result_text = response.choices[0].message.content
+        result = json.loads(result_text)
+        return result
     except Exception as e:
         logger.error(f"AI 生成摘要失败: {e}")
-        return {"content": f"AI 摘要生成失败: {e}"}
+        return {"summary": f"AI 摘要生成失败: {e}", "basic_question_ids": []}
+
+def get_last_launch_time():
+    """从简报文件名中获取上次启动时间"""
+    vault_path = config.obsidian_vault_path
+    if not vault_path or not os.path.exists(vault_path):
+        return None
+    
+    # 查找所有简报文件
+    pattern = re.compile(r'简报_(\d{10})_-(\d{10})(?:_\d+)?\.md')
+    last_time = None
+    
+    for filename in os.listdir(vault_path):
+        match = pattern.match(filename)
+        if match:
+            end_time_str = match.group(2)  # 文件名中的结束时间
+            try:
+                # 解析时间：YYMMDDHHMM
+                end_time = datetime.strptime(end_time_str, "%y%m%d%H%M")
+                if last_time is None or end_time > last_time:
+                    last_time = end_time
+            except ValueError:
+                continue
+    
+    return last_time
+
+def generate_filename(start_time, end_time, index=None):
+    """生成简报文件名"""
+    start_str = start_time.strftime("%y%m%d%H%M")
+    end_str = end_time.strftime("%y%m%d%H%M")
+    
+    if index is None:
+        return f"简报_{start_str}_-{end_str}.md"
+    else:
+        return f"简报_{start_str}_-{end_str}_{index}.md"
+
+def is_basic_operation_question(content):
+    """判断是否为基础操作问题"""
+    basic_keywords = [
+        # 交易所相关
+        '下载交易所', '交易所app', '交易所下载', '交易所安装',
+        '币安下载', 'okx下载', '火币下载', 'gate下载',
+        '币安app', 'okx app', '火币app',
+        # Telegram相关
+        'telegram中文', 'tg中文', 'telegram设置中文', 'tg设置中文',
+        'telegram语言', 'tg语言', 'telegram怎么', 'tg怎么',
+        # Uniswap相关
+        '下载uniswap', 'uniswap app', 'uniswap下载', 'uniswap安装',
+        'uniswap怎么',
+        # 通用操作
+        '怎么下载', '如何下载', '怎么安装', '如何安装',
+        '怎么用', '如何使用', '怎么操作', '如何操作',
+        '新手教程', '入门教程', '基础教程', '教程',
+        # 钱包相关
+        '下载钱包', '钱包app', '钱包下载', '钱包安装',
+        'metamask下载', '小狐狸下载', 'tp钱包下载',
+        '钱包怎么',
+    ]
+    
+    content_lower = content.lower()
+    for keyword in basic_keywords:
+        if keyword in content_lower:
+            return True
+    return False
+
+def count_basic_operation_questions(messages):
+    """统计基础操作问题的数量"""
+    count = 0
+    for msg in messages:
+        if is_basic_operation_question(msg.content):
+            count += 1
+    return count
+
+def filter_basic_operation_questions(messages):
+    """过滤掉基础操作问题"""
+    filtered_messages = []
+    for msg in messages:
+        if not is_basic_operation_question(msg.content):
+            filtered_messages.append(msg)
+    return filtered_messages
+
+def save_report_stats(start_time, end_time, basic_op_count, filename):
+    """保存简报统计数据"""
+    stats_dir = "data/report_stats"
+    if not os.path.exists(stats_dir):
+        os.makedirs(stats_dir)
+    
+    stats_file = os.path.join(stats_dir, "report_stats.json")
+    
+    # 计算统计小时数
+    hours = (end_time - start_time).total_seconds() / 3600
+    
+    # 创建统计记录
+    stats_record = {
+        "filename": filename,
+        "start_time": start_time.isoformat(),
+        "end_time": end_time.isoformat(),
+        "hours": round(hours, 2),
+        "basic_operation_count": basic_op_count,
+        "basic_operation_density": round(basic_op_count / hours, 4) if hours > 0 else 0,
+        "created_at": datetime.now().isoformat()
+    }
+    
+    # 读取现有统计数据
+    all_stats = []
+    if os.path.exists(stats_file):
+        try:
+            with open(stats_file, 'r', encoding='utf-8') as f:
+                all_stats = json.load(f)
+        except:
+            all_stats = []
+    
+    # 添加新记录
+    all_stats.append(stats_record)
+    
+    # 只保留最近100条记录
+    if len(all_stats) > 100:
+        all_stats = all_stats[-100:]
+    
+    # 保存到文件
+    with open(stats_file, 'w', encoding='utf-8') as f:
+        json.dump(all_stats, f, ensure_ascii=False, indent=2)
+    
+    return stats_record
+
+def save_training_data(messages, basic_question_ids):
+    """保存训练数据到CSV文件，用于机器学习模型训练"""
+    import csv
+    from datetime import datetime
+    
+    # 创建训练数据目录
+    training_dir = "data/training_data"
+    os.makedirs(training_dir, exist_ok=True)
+    
+    # 训练数据文件
+    training_file = os.path.join(training_dir, "basic_questions_training.csv")
+    
+    # 检查文件是否存在，如果不存在则创建并写入表头
+    file_exists = os.path.exists(training_file)
+    
+    with open(training_file, 'a', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        
+        # 如果文件不存在，写入表头
+        if not file_exists:
+            writer.writerow(['message_id', 'message_text', 'is_basic_question', 'timestamp'])
+        
+        # 保存所有消息的训练数据
+        for idx, msg in enumerate(messages):
+            is_basic = 1 if idx in basic_question_ids else 0
+            writer.writerow([
+                f"{datetime.now().strftime('%Y%m%d')}_{idx}",
+                msg.content[:500],  # 限制长度，避免CSV问题
+                is_basic,
+                datetime.now().isoformat()
+            ])
+    
+    logger.info(f"已保存 {len(messages)} 条训练数据到 {training_file}")
+
+def get_previous_report_stats():
+    """获取上次简报的统计数据"""
+    stats_file = "data/report_stats/report_stats.json"
+    if not os.path.exists(stats_file):
+        return None
+    
+    try:
+        with open(stats_file, 'r', encoding='utf-8') as f:
+            all_stats = json.load(f)
+        
+        if not all_stats:
+            return None
+        
+        # 返回最近的一条记录（排除当前正在处理的）
+        return all_stats[-1]
+    except:
+        return None
+
+def calculate_basic_op_density_change(current_stats, previous_stats):
+    """计算基础操作问题密度变化"""
+    if previous_stats is None:
+        # 第一次简报，上次密度为0
+        previous_density = 0
+    else:
+        previous_density = previous_stats.get("basic_operation_density", 0)
+    
+    current_density = current_stats.get("basic_operation_density", 0)
+    
+    # 计算变化：当前密度 - 上次密度
+    density_change = current_density - previous_density
+    
+    # 返回格式化后的结果（保留两位小数）
+    return f"{density_change:+.2f}" if density_change >= 0 else f"{density_change:.2f}"
 
 def save_to_obsidian(content, filename):
     vault_path = config.obsidian_vault_path
@@ -101,28 +284,55 @@ def save_to_obsidian(content, filename):
     logger.info(f"报告已保存到 Obsidian: {file_path}")
 
 async def main():
-    logger.info("开始生成 24 小时深度简报 (昨日 08:00 - 今日 08:00)...")
+    logger.info("开始生成深度简报...")
     
     # 调试：检查配置是否正确加载
     for acc in config.collector_accounts:
         logger.info(f"账号 {acc.account_id} 监控群组数量: {len(acc.monitored_chats) if acc.monitored_chats else 0}")
     
-    # 设定北京时间范围：前一天早上8点到当天早上8点
-    now = datetime.now()
+    # 获取当前时间
+    current_time = datetime.now()
+    logger.info(f"当前时间: {current_time}")
     
-    # 计算当天的8点（如果当前时间小于8点，则结束时间是昨天的8点）
-    today_8am = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    # 获取上次启动时间
+    last_launch_time = get_last_launch_time()
     
-    # 如果当前时间小于8点，则结束时间是昨天的8点，开始时间是前天的8点
-    if now < today_8am:
-        end_time = today_8am - timedelta(days=1)
-        start_time = end_time - timedelta(days=1)
+    # 确定时间窗口
+    if last_launch_time is None:
+        # 第一次启动：统计前24小时
+        logger.info("第一次启动，统计前24小时内容")
+        end_time = current_time
+        start_time = current_time - timedelta(hours=24)
+        time_windows = [(start_time, end_time)]
     else:
-        # 当前时间大于等于8点，结束时间是今天的8点，开始时间是昨天的8点
-        end_time = today_8am
-        start_time = end_time - timedelta(days=1)
+        # 计算时间间隔（小时）
+        time_diff = (current_time - last_launch_time).total_seconds() / 3600
+        logger.info(f"距离上次启动时间: {time_diff:.2f} 小时")
+        
+        if time_diff <= 48:
+            # 情况1：间隔 ≤ 48小时
+            logger.info("时间间隔 ≤ 48小时，生成1份简报")
+            start_time = last_launch_time
+            end_time = current_time
+            time_windows = [(start_time, end_time)]
+        elif time_diff <= 120:
+            # 情况2：间隔 > 48小时 且 ≤ 120小时
+            logger.info("时间间隔 48-120小时，生成2份简报")
+            split_time = current_time - timedelta(hours=48)
+            time_windows = [
+                (last_launch_time, split_time),  # 第一份：上次启动时间 → 48小时前
+                (split_time, current_time)       # 第二份：48小时前 → 当前时间
+            ]
+        else:
+            # 情况3：间隔 > 120小时
+            logger.info("时间间隔 > 120小时，生成1份简报（最近48小时）")
+            start_time = current_time - timedelta(hours=48)
+            end_time = current_time
+            time_windows = [(start_time, end_time)]
     
-    logger.info(f"时间窗口 (北京时间): {start_time} 至 {end_time}")
+    # 记录时间窗口
+    for i, (start, end) in enumerate(time_windows):
+        logger.info(f"时间窗口 {i+1}: {start} 至 {end}")
     
     # 初始化 AI 总结器
     summarizer = AISummarizer(
@@ -131,57 +341,106 @@ async def main():
     )
     
     async with TelegramMultiAccountAdapter() as adapter:
-        logger.info("正在并发采集消息...")
-        
-        # limit_per_chat 设大一点，因为是 24 小时
-        unified_messages = await adapter.fetch_messages_concurrently(
-            start_time=start_time,
-            end_time=end_time,
-            limit_per_chat=300
-        )
-        
-        if not unified_messages:
-            logger.info("该时间段内没有抓取到新消息")
-            return
-
-        chat_contents = {}
-        for msg in unified_messages:
-            chat_name = msg.chat_name or msg.chat_id
-            if chat_name not in chat_contents:
-                chat_contents[chat_name] = []
-            chat_contents[chat_name].append(msg.content)
+        # 处理每个时间窗口
+        for i, (start_time, end_time) in enumerate(time_windows):
+            logger.info(f"正在处理时间窗口 {i+1}/{len(time_windows)}: {start_time} 至 {end_time}")
             
-        aggregated_input = ""
-        total_messages_count = 0
-        MAX_TOTAL_MESSAGES = 1000
+            logger.info("正在并发采集消息...")
+            
+            # limit_per_chat 根据时间间隔调整
+            hours_diff = (end_time - start_time).total_seconds() / 3600
+            limit_per_chat = min(300, int(hours_diff * 12.5))  # 大约每小时12.5条
+            
+            unified_messages = await adapter.fetch_messages_concurrently(
+                start_time=start_time,
+                end_time=end_time,
+                limit_per_chat=limit_per_chat
+            )
+            
+            if not unified_messages:
+                logger.info(f"时间窗口 {i+1} 内没有抓取到新消息")
+                continue
 
-        for chat_name, contents in chat_contents.items():
-            if total_messages_count >= MAX_TOTAL_MESSAGES:
-                logger.warning(f"已达到最大消息限制 {MAX_TOTAL_MESSAGES}，停止聚合后续内容")
-                break
+            # 统计基础操作问题数量
+            basic_op_count = count_basic_operation_questions(unified_messages)
+            logger.info(f"检测到基础操作问题数量: {basic_op_count}")
+            
+            # 过滤掉基础操作问题
+            filtered_messages = filter_basic_operation_questions(unified_messages)
+            logger.info(f"过滤后剩余消息数量: {len(filtered_messages)}")
+
+            chat_contents = {}
+            for msg in filtered_messages:
+                chat_name = msg.chat_name or msg.chat_id
+                if chat_name not in chat_contents:
+                    chat_contents[chat_name] = []
+                chat_contents[chat_name].append(msg.content)
                 
-            # 每个群组只取前 50 条，同时受总数限制
-            remaining_quota = MAX_TOTAL_MESSAGES - total_messages_count
-            to_take = min(50, remaining_quota)
+            aggregated_input = ""
+            total_messages_count = 0
+            MAX_TOTAL_MESSAGES = 1000
+
+            for chat_name, contents in chat_contents.items():
+                if total_messages_count >= MAX_TOTAL_MESSAGES:
+                    logger.warning(f"已达到最大消息限制 {MAX_TOTAL_MESSAGES}，停止聚合后续内容")
+                    break
+                    
+                # 每个群组只取前 50 条，同时受总数限制
+                remaining_quota = MAX_TOTAL_MESSAGES - total_messages_count
+                to_take = min(50, remaining_quota)
+                
+                chat_slice = contents[:to_take]
+                aggregated_input += f"### Group: {chat_name}\n" + "\n".join(chat_slice) + "\n\n"
+                total_messages_count += len(chat_slice)
             
-            chat_slice = contents[:to_take]
-            aggregated_input += f"### Group: {chat_name}\n" + "\n".join(chat_slice) + "\n\n"
-            total_messages_count += len(chat_slice)
-        
-        logger.info(f"成功抓取 {len(unified_messages)} 条去重后的消息，最终聚合了 {total_messages_count} 条消息进行摘要")
-        
-        logger.info("正在调用 AI 生成深度简报...")
-        summary_result = await generate_global_summary(summarizer, aggregated_input)
-        report_content = summary_result['content']
-        
-        # 保存到 Obsidian
-        filename = f"DailyReport_{start_time.strftime('%Y%m%d')}_to_{end_time.strftime('%Y%m%d')}.md"
-        save_to_obsidian(f"# 📊 24小时信息深度简报\n\n**周期**: {start_time} - {end_time}\n\n{report_content}", filename)
-        
-        # 推送到 Telegram
-        header = f"📊 24小时信息深度简报\n📅 {start_time.strftime('%m-%d 08:00')} ~ {end_time.strftime('%m-%d 08:00')}\n\n"
-        await adapter.send_digest_to_channel(header + report_content)
-        logger.info("简报已推送到 Telegram 频道")
+            logger.info(f"成功抓取 {len(unified_messages)} 条去重后的消息，过滤后剩余 {len(filtered_messages)} 条，最终聚合了 {total_messages_count} 条消息进行摘要")
+            
+            logger.info("正在调用 AI 生成深度简报...")
+            # 传递完整的消息列表给AI，让AI识别基础操作问题
+            summary_result = await generate_global_summary(summarizer, aggregated_input, unified_messages, start_time, end_time)
+            
+            # 从JSON结果中提取简报内容和基础问题ID列表
+            report_content = summary_result.get('summary', '')
+            basic_question_ids = summary_result.get('basic_question_ids', [])
+            
+            # 计算基础问题密度（程序计算，确保准确）
+            total_messages = len(unified_messages)
+            basic_op_count = len(basic_question_ids)
+            basic_op_density = basic_op_count / total_messages if total_messages > 0 else 0
+            
+            logger.info(f"AI识别基础操作问题数量: {basic_op_count} (密度: {basic_op_density:.2%})")
+            
+            # 保存训练数据
+            save_training_data(unified_messages, basic_question_ids)
+            
+            # 生成文件名（处理同一天多次启动的情况）
+            filename = generate_filename(start_time, end_time, i+1 if len(time_windows) > 1 else None)
+            
+            # 获取上次简报统计数据
+            previous_stats = get_previous_report_stats()
+            
+            # 保存本次简报统计数据
+            current_stats = save_report_stats(start_time, end_time, basic_op_count, filename)
+            
+            # 计算基础操作问题密度变化
+            density_change = calculate_basic_op_density_change(current_stats, previous_stats)
+            
+            # 在报告内容后添加基础操作问题密度统计
+            density_stats = f"""
+## 📊 基础操作问题统计
+- 总消息数: {total_messages}
+- 基础操作问题数: {basic_op_count}
+- 基础问题密度: {basic_op_density:.2%}
+- 密度变化: {density_change}
+"""
+            enhanced_report_content = f"{report_content}\n\n{density_stats}"
+            
+            # 保存到 Obsidian
+            save_to_obsidian(enhanced_report_content, filename)
+            
+            # 推送到 Telegram
+            await adapter.send_digest_to_channel(enhanced_report_content)
+            logger.info(f"简报 {i+1} 已推送到 Telegram 频道")
 
 if __name__ == "__main__":
     asyncio.run(main())
