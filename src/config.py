@@ -45,8 +45,18 @@ class PushConfig:
 @dataclass
 class AIConfig:
     """AI 服务配置"""
+    # DeepSeek 配置（保留兼容性）
     deepseek_api_key: str
     openai_base_url: str = "https://api.deepseek.com"
+    
+    # Gemini 配置（新主用）
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-1.5-flash"  # 使用Gemini 1.5 Flash，支持1M上下文（Gemini 3 Flash尚未正式发布）
+    
+    @property
+    def use_gemini(self) -> bool:
+        """是否使用Gemini（如果配置了API密钥）"""
+        return bool(self.gemini_api_key and self.gemini_api_key.strip())
 
 
 @dataclass
@@ -140,7 +150,9 @@ def load_config() -> AppConfig:
     # AI 配置
     ai_config = AIConfig(
         deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", ""),
-        openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com")
+        openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com"),
+        gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
     )
     
     # 应用配置

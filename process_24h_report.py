@@ -21,8 +21,64 @@ from src.models import UnifiedMessage, Platform
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-async def generate_global_summary(summarizer, aggregated_text, message_list, start_time, end_time):
-    """调用 AI 生成全局摘要，遵循 setting_AI.md 中的逻辑，并识别基础操作问题"""
+def estimate_token_count(text):
+    """粗略估计文本的token数量（英文单词数 + 中文字符数 * 2）"""
+    # 简单估算：英文单词数 + 中文字符数 * 2
+    english_words = len(re.findall(r'\b[a-zA-Z]+\b', text))
+    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+    # 其他字符（标点、数字等）按0.5倍计算
+    other_chars = len(text) - english_words - chinese_chars
+    return english_words + chinese_chars * 2 + int(other_chars * 0.5)
+
+def chunk_messages_by_tokens(message_list, max_tokens_per_chunk=100000):
+    """
+    将消息列表按token数分块，确保每块不超过限制
+    返回分块列表，每块包含消息和起始ID
+    """
+    if not message_list:
+        return []
+    
+    chunks = []
+    current_chunk = []
+    current_tokens = 0
+    current_start_id = 0
+    
+    for idx, msg in enumerate(message_list):
+        # 优化消息格式：只保留ID，去掉用户名
+        message_text = f"[ID:{idx}] {msg.content}"
+        message_tokens = estimate_token_count(message_text)
+        
+        # 如果当前块为空或添加这条消息不会超过限制，就添加到当前块
+        if not current_chunk or current_tokens + message_tokens <= max_tokens_per_chunk:
+            current_chunk.append((idx, msg))
+            current_tokens += message_tokens
+        else:
+            # 当前块已满，保存并开始新块
+            chunks.append({
+                'start_id': current_start_id,
+                'messages': current_chunk.copy(),
+                'estimated_tokens': current_tokens
+            })
+            current_chunk = [(idx, msg)]
+            current_tokens = message_tokens
+            current_start_id = idx
+    
+    # 添加最后一个块
+    if current_chunk:
+        chunks.append({
+            'start_id': current_start_id,
+            'messages': current_chunk,
+            'estimated_tokens': current_tokens
+        })
+    
+    logger.info(f"消息分块完成：共 {len(message_list)} 条消息，分成 {len(chunks)} 个块")
+    for i, chunk in enumerate(chunks):
+        logger.info(f"  块 {i+1}: {len(chunk['messages'])} 条消息，估计 {chunk['estimated_tokens']} tokens")
+    
+    return chunks
+
+async def generate_chunk_summary(summarizer, chunk_data, chunk_index, total_chunks, start_time, end_time):
+    """生成单个分块的摘要"""
     # 读取 setting_AI.md
     try:
         with open("setting_AI.md", "r", encoding="utf-8") as f:
@@ -34,16 +90,130 @@ async def generate_global_summary(summarizer, aggregated_text, message_list, sta
     # 格式化时间范围
     time_range_str = f"{start_time.strftime('%m%d %H:%M')} - {end_time.strftime('%m%d %H:%M')}"
 
-    # 为每条消息创建ID，方便AI引用，并包含用户以支持"2人以上讨论"的判断
+    # 准备分块消息文本
     messages_with_ids = []
-    for idx, msg in enumerate(message_list):
-        author = msg.author_name or "Unknown"
-        messages_with_ids.append(f"[ID:{idx}] [User:{author}] {msg.content}")
+    for original_id, msg in chunk_data['messages']:
+        # 使用相对ID，从0开始
+        relative_id = original_id - chunk_data['start_id']
+        messages_with_ids.append(f"[ID:{relative_id}] {msg.content}")
     
     messages_text = "\n".join(messages_with_ids)
     
     prompt = f"""
-    你是一个专业的区块链投研助手。请根据以下从多个 Telegram 群组采集到的碎片化信息，整理出一份深度简报。
+    你是一个专业的区块链投研助手。请根据以下从多个 Telegram 群组采集到的碎片化信息，整理出这部分信息的摘要。
+
+    这是第 {chunk_index + 1}/{total_chunks} 个分块。
+
+    请严格遵循以下设定（setting_AI.md）：
+    {setting_ai_content}
+
+    当前简报的时间范围是：{time_range_str}
+
+    采集到的原始信息如下（每条消息都有ID标记）：
+    {messages_text}
+
+    请返回一个JSON对象，格式如下：
+    {{
+      "summary": "这部分信息的摘要内容，重点关注：1) 主要讨论主题 2) 重要趋势 3) 风险提示 4) 投资机会",
+      "basic_question_ids": [0, 1, 2, ...]  // 基础操作问题的ID列表（相对ID），如果没有则为空数组[]
+    }}
+    """
+    
+    try:
+        # 使用新的summarizer接口
+        result = await summarizer.generate_json_response(
+            prompt=prompt,
+            system_prompt="你是一个专业的区块链投研助手，严格按照给定的整理逻辑生成分块摘要，并返回JSON格式的结果。",
+            temperature=0.3
+        )
+        
+        # 将相对ID转换回原始ID
+        if result.get("basic_question_ids"):
+            original_ids = []
+            for relative_id in result["basic_question_ids"]:
+                original_id = chunk_data['start_id'] + relative_id
+                original_ids.append(original_id)
+            result["basic_question_ids"] = original_ids
+        
+        return result
+    except Exception as e:
+        logger.error(f"分块 {chunk_index + 1} AI 生成摘要失败: {e}")
+        return {"summary": f"分块 {chunk_index + 1} AI 摘要生成失败: {e}", "basic_question_ids": []}
+
+async def generate_global_summary(summarizer, aggregated_text, message_list, start_time, end_time):
+    """调用 AI 生成全局摘要，使用分块处理策略"""
+    # 读取 setting_AI.md
+    try:
+        with open("setting_AI.md", "r", encoding="utf-8") as f:
+            setting_ai_content = f.read()
+    except Exception as e:
+        logger.error(f"读取 setting_AI.md 失败: {e}")
+        setting_ai_content = "无法读取 setting_AI.md，请检查文件是否存在。"
+
+    # 格式化时间范围
+    time_range_str = f"{start_time.strftime('%m%d %H:%M')} - {end_time.strftime('%m%d %H:%M')}"
+
+    if not message_list:
+        logger.warning("没有可用的消息进行摘要生成")
+        return {"summary": f"📊 {time_range_str}\n\n⚠️ 没有足够的信息生成简报", "basic_question_ids": []}
+
+    logger.info(f"开始处理 {len(message_list)} 条消息的摘要生成")
+    
+    # 1. 将消息分块
+    chunks = chunk_messages_by_tokens(message_list, max_tokens_per_chunk=100000)
+    
+    if not chunks:
+        logger.warning("消息分块失败")
+        return {"summary": f"📊 {time_range_str}\n\n⚠️ 消息处理失败", "basic_question_ids": []}
+    
+    # 2. 并行生成分块摘要
+    chunk_summaries = []
+    all_basic_question_ids = []
+    
+    for chunk_index, chunk_data in enumerate(chunks):
+        logger.info(f"处理分块 {chunk_index + 1}/{len(chunks)}")
+        chunk_result = await generate_chunk_summary(
+            summarizer, chunk_data, chunk_index, len(chunks), start_time, end_time
+        )
+        chunk_summaries.append(chunk_result)
+        
+        # 收集基础操作问题ID
+        if chunk_result.get("basic_question_ids"):
+            all_basic_question_ids.extend(chunk_result["basic_question_ids"])
+    
+    # 3. 聚合所有分块摘要
+    if len(chunks) == 1:
+        # 如果只有一个分块，直接使用其摘要
+        final_summary = chunk_summaries[0]["summary"]
+    else:
+        # 如果有多个分块，需要聚合
+        final_summary = await aggregate_chunk_summaries(
+            summarizer, chunk_summaries, start_time, end_time, setting_ai_content
+        )
+    
+    # 4. 确保摘要格式正确
+    if not final_summary.startswith("📊"):
+        final_summary = f"📊 {time_range_str}\n\n{final_summary}"
+    
+    return {
+        "summary": final_summary,
+        "basic_question_ids": all_basic_question_ids
+    }
+
+async def aggregate_chunk_summaries(summarizer, chunk_summaries, start_time, end_time, setting_ai_content):
+    """聚合多个分块摘要为全局摘要"""
+    # 格式化时间范围
+    time_range_str = f"{start_time.strftime('%m%d %H:%M')} - {end_time.strftime('%m%d %H:%M')}"
+    
+    # 准备所有分块摘要
+    chunk_summary_texts = []
+    for i, chunk_result in enumerate(chunk_summaries):
+        chunk_summary_texts.append(f"=== 分块 {i+1} 摘要 ===\n{chunk_result['summary']}")
+    
+    all_chunk_summaries = "\n\n".join(chunk_summary_texts)
+    
+    prompt = f"""
+    你是一个专业的区块链投研助手。请根据以下多个分块的摘要，整理出一份完整的深度简报。
 
     请严格遵循以下设定（setting_AI.md）：
     {setting_ai_content}
@@ -51,33 +221,41 @@ async def generate_global_summary(summarizer, aggregated_text, message_list, sta
     当前简报的时间范围是：{time_range_str}
     请确保简报开头严格按照设定中的格式：📊 {time_range_str}
 
-    采集到的原始信息如下（每条消息都有ID标记和用户名）：
-    {messages_text}
+    以下是 {len(chunk_summaries)} 个分块的摘要：
+    {all_chunk_summaries}
 
-    请返回一个JSON对象，格式如下：
-    {{
-      "summary": "完整的简报内容，按照 setting_AI.md 的格式要求",
-      "basic_question_ids": [0, 1, 2, ...]  // 基础操作问题的ID列表，如果没有则为空数组[]
-    }}
+    请生成一份完整的全局简报，要求：
+    1. 整合所有分块的关键信息
+    2. 识别整体趋势和模式
+    3. 突出最重要的投资机会和风险
+    4. 保持setting_AI.md中要求的格式和结构
+    5. 避免重复信息，进行去重和整合
+
+    请直接返回完整的简报内容（不需要JSON格式）。
     """
     
-    # 这里直接复用 summarizer 的底层调用
     try:
-        response = await summarizer.client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": "你是一个专业的区块链投研助手，严格按照给定的整理逻辑生成简报，并返回JSON格式的结果。"},
-                {"role": "user", "content": prompt}
-            ],
+        # 使用新的summarizer接口
+        final_summary = await summarizer.generate_summary_with_prompt(
+            prompt=prompt,
+            system_prompt="你是一个专业的区块链投研助手，擅长整合多个分块摘要，生成完整、连贯的全局简报。",
             temperature=0.3,
-            response_format={"type": "json_object"}
+            json_format=False
         )
-        result_text = response.choices[0].message.content
-        result = json.loads(result_text)
-        return result
+        
+        # 确保格式正确
+        if not final_summary.startswith("📊"):
+            final_summary = f"📊 {time_range_str}\n\n{final_summary}"
+        
+        logger.info(f"全局摘要聚合完成，长度：{len(final_summary)} 字符")
+        return final_summary
     except Exception as e:
-        logger.error(f"AI 生成摘要失败: {e}")
-        return {"summary": f"AI 摘要生成失败: {e}", "basic_question_ids": []}
+        logger.error(f"全局摘要聚合失败: {e}")
+        # 如果聚合失败，回退到拼接所有分块摘要
+        fallback_summary = f"📊 {time_range_str}\n\n"
+        for i, chunk_result in enumerate(chunk_summaries):
+            fallback_summary += f"\n=== 分块 {i+1} ===\n{chunk_result['summary']}\n"
+        return fallback_summary
 
 def get_last_launch_time():
     """从简报文件名中获取上次启动时间"""
@@ -378,22 +556,14 @@ async def main():
                 
             aggregated_input = ""
             total_messages_count = 0
-            MAX_TOTAL_MESSAGES = 1000
 
             for chat_name, contents in chat_contents.items():
-                if total_messages_count >= MAX_TOTAL_MESSAGES:
-                    logger.warning(f"已达到最大消息限制 {MAX_TOTAL_MESSAGES}，停止聚合后续内容")
-                    break
-                    
-                # 每个群组只取前 50 条，同时受总数限制
-                remaining_quota = MAX_TOTAL_MESSAGES - total_messages_count
-                to_take = min(50, remaining_quota)
-                
-                chat_slice = contents[:to_take]
+                # 不再限制每个群组的消息数量，使用所有消息
+                chat_slice = contents  # 使用所有消息
                 aggregated_input += f"### Group: {chat_name}\n" + "\n".join(chat_slice) + "\n\n"
                 total_messages_count += len(chat_slice)
             
-            logger.info(f"成功抓取 {len(unified_messages)} 条去重后的消息，过滤后剩余 {len(filtered_messages)} 条，最终聚合了 {total_messages_count} 条消息进行摘要")
+            logger.info(f"成功抓取 {len(unified_messages)} 条去重后的消息，过滤后剩余 {len(filtered_messages)} 条，将处理所有 {total_messages_count} 条消息")
             
             logger.info("正在调用 AI 生成深度简报...")
             # 传递完整的消息列表给AI，让AI识别基础操作问题
