@@ -275,8 +275,12 @@ class AISummarizer:
                 max_retries=max_retries
             )
 
+            # 清理和提取有效的JSON内容
+            cleaned_text = self._extract_valid_json(response_text)
+            logger.debug(f"清理后的JSON内容: {cleaned_text[:100]}...")
+
             # 解析JSON
-            parsed = json.loads(response_text)
+            parsed = json.loads(cleaned_text)
 
             # 处理 AI 返回数组的情况 [{}, {}]，提取第一个对象
             if isinstance(parsed, list):
@@ -293,8 +297,55 @@ class AISummarizer:
 
             return parsed
         except json.JSONDecodeError as e:
-            logger.error(f"JSON解析失败: {e}, 响应文本: {response_text[:200] if response_text else 'N/A'}")
+            logger.error(f"JSON解析失败: {e}, 响应文本: {response_text[:300] if response_text else 'N/A'}")
             raise
+
+    def _extract_valid_json(self, text: str) -> str:
+        """
+        从AI返回的文本中提取有效的JSON内容
+        处理AI返回多个JSON对象、附带思考过程等特殊情况
+        """
+        if not text:
+            return text
+
+        text = text.strip()
+
+        # 情况1：已经是有效的单一JSON对象
+        try:
+            json.loads(text)
+            return text
+        except json.JSONDecodeError:
+            pass
+
+        # 情况2：查找第一个 { 和最后一个 }，提取JSON对象
+        first_brace = text.find('{')
+        last_brace = text.rfind('}')
+
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            candidate = text[first_brace:last_brace + 1]
+            try:
+                json.loads(candidate)
+                logger.warning(f"从文本中提取到有效JSON，已清理多余内容")
+                return candidate
+            except json.JSONDecodeError:
+                pass
+
+        # 情况3：尝试查找 markdown 代码块格式
+        import re
+        # 匹配 ```json 或 ``` 包裹的JSON
+        code_block_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
+        if code_block_match:
+            candidate = code_block_match.group(1).strip()
+            try:
+                json.loads(candidate)
+                logger.warning(f"从代码块中提取到有效JSON")
+                return candidate
+            except json.JSONDecodeError:
+                pass
+
+        # 兜底：返回原始文本，让后面的错误处理捕获
+        logger.warning(f"无法清理JSON格式，返回原始文本")
+        return text
         except Exception as e:
             logger.error(f"生成JSON响应失败: {e}")
             raise
