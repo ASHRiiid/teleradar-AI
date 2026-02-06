@@ -448,18 +448,49 @@ def calculate_basic_op_density_change(current_stats, previous_stats):
     # 返回格式化后的结果（保留两位小数）
     return f"{density_change:+.2f}" if density_change >= 0 else f"{density_change:.2f}"
 
-def save_to_obsidian(content, filename):
+def create_empty_report_file(start_time, end_time, index=None):
+    """创建空简报文件（用于提前占位）"""
+    filename = generate_filename(start_time, end_time, index)
     vault_path = config.obsidian_vault_path
     if not vault_path:
-        logger.warning("未配置 OBSIDIAN_VAULT_PATH，跳过保存")
-        return
+        logger.warning("未配置 OBSIDIAN_VAULT_PATH，跳过创建空文件")
+        return None
+
     if not os.path.exists(vault_path):
         os.makedirs(vault_path)
-    
+
     file_path = os.path.join(vault_path, filename)
+    empty_content = f"""# 📊 {start_time.strftime('%m%d %H:%M')} - {end_time.strftime('%m%d %H:%M')}
+
+> 简报生成中，请稍候...
+
+*创建时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*
+"""
     with open(file_path, "w", encoding="utf-8") as f:
-        f.write(content)
-    logger.info(f"报告已保存到 Obsidian: {file_path}")
+        f.write(empty_content)
+    logger.info(f"已创建空简报文件: {file_path}")
+    return file_path
+
+def update_report_file(file_path, content, filename=None):
+    """更新简报文件内容"""
+    if file_path and os.path.exists(file_path):
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        logger.info(f"已更新简报文件: {file_path}")
+
+    # 同时保存到 Obsidian
+    if filename:
+        vault_path = config.obsidian_vault_path
+        if not vault_path:
+            logger.warning("未配置 OBSIDIAN_VAULT_PATH，跳过保存")
+            return
+        if not os.path.exists(vault_path):
+            os.makedirs(vault_path)
+
+        obsidian_path = os.path.join(vault_path, filename)
+        with open(obsidian_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        logger.info(f"报告已保存到 Obsidian: {obsidian_path}")
 
 async def main():
     logger.info("开始生成深度简报...")
@@ -511,7 +542,14 @@ async def main():
     # 记录时间窗口
     for i, (start, end) in enumerate(time_windows):
         logger.info(f"时间窗口 {i+1}: {start} 至 {end}")
-    
+
+    # 先创建空简报文件（提前占位）
+    created_files = []
+    for i, (start, end) in enumerate(time_windows):
+        empty_file = create_empty_report_file(start, end, i+1 if len(time_windows) > 1 else None)
+        if empty_file:
+            created_files.append((i, empty_file))
+
     # 初始化 AI 总结器
     summarizer = AISummarizer(
         api_key=config.ai_config.deepseek_api_key, 
@@ -605,8 +643,11 @@ async def main():
 """
             enhanced_report_content = f"{report_content}\n\n{density_stats}"
             
-            # 保存到 Obsidian
-            save_to_obsidian(enhanced_report_content, filename)
+            # 保存到 Obsidian（更新已创建的空文件）
+            for idx, file_path in created_files:
+                if idx == i:
+                    update_report_file(file_path, enhanced_report_content, filename)
+                    break
             
             # 推送到 Telegram
             await adapter.send_digest_to_channel(enhanced_report_content)

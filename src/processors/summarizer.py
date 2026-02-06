@@ -346,6 +346,3 @@ class AISummarizer:
         # 兜底：返回原始文本，让后面的错误处理捕获
         logger.warning(f"无法清理JSON格式，返回原始文本")
         return text
-        except Exception as e:
-            logger.error(f"生成JSON响应失败: {e}")
-            raise

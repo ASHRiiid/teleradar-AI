@@ -42,7 +42,7 @@ chmod +x launch.command
 
 ## 🤖 自动化系统
 
-为了实现真正的“无人值守”运行，系统配备了针对 macOS 优化的自动化执行方案。即使 MacBook 处于合盖睡眠状态，也能每天定时唤醒并静默执行任务。
+为了实现真正的"无人值守"运行，系统配备了针对 macOS 优化的自动化执行方案。即使 MacBook 处于合盖睡眠状态，也能每天定时唤醒并静默执行任务。
 
 ### 核心功能逻辑
 
@@ -53,6 +53,7 @@ chmod +x launch.command
 3.  **网络自动验证**：唤醒后通过 `baidu.com` 验证网络连通性，确保网络服务已就绪，连接成功后自动等待 5 秒以确保稳定。
 4.  **超时与防卡死**：内置 5 分钟强制超时保护机制，防止因网络波动或接口响应过慢导致的脚本僵死。
 5.  **显示器控制优化**：针对合盖状态进行了优化，在自动化执行过程中尽量避免非必要的显示器唤醒。
+6.  **后台静默执行**：唤醒自动执行时，launch.command 使用 nohup 后台运行，不弹出终端窗口，日志保存到 `obsidian-tem/log/`。
 
 ### 文件结构说明 (`/auto`)
 
@@ -61,6 +62,10 @@ chmod +x launch.command
 -   `com.user.autowake.plist`：**系统服务配置**。定义了 launchd 的调度规则。
 -   `test_auto.sh`：**自动化测试工具**。用于验证权限、网络检查及状态检测功能是否正常。
 -   `auto_wake.log`：**运行日志**。记录每次自动唤醒后的执行详情。
+
+### 📁 日志文件
+
+简报生成执行的日志保存在：`obsidian-tem/log/logYYYYMMDDHHMM.log`
 
 ### 安装与配置
 
@@ -131,7 +136,9 @@ streamlit run web/dashboard.py
 ├── auto/                   # 自动化系统 (定时唤醒、网络验证、超时保护)
 ├── data/                   # 本地数据库存储 (raw_messages.db)
 ├── obsidian-tem/           # 自动生成的 Obsidian Markdown 报告
-├── test/                   # 完善的测试套件
+│   ├── log/                # 简报生成日志 (logYYYYMMDDHHMM.log)
+│   └── inbox-bot/          # Telegram 接收服务
+├── test/                   # 测试套件（已弃用，可清理）
 ├── requirements.txt        # 项目依赖清单
 └── README.md               # 项目文档
 ```
